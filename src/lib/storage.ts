@@ -40,6 +40,17 @@ export function loadState() {
   }
   const sid = sessionStorage.getItem(SESSION);
   const session = sid ? state.sessions.find((item) => item.id === sid && item.expiresAt > Date.now()) : undefined;
+  let moved = false;
+  for (const user of state.users) {
+    if (user.status === "otp_pending") {
+      user.status = "kyc_locked";
+      user.otpVerifiedAt = user.otpVerifiedAt ?? Date.now();
+      moved = true;
+    }
+  }
+  const pendingCodes = state.challenges.length;
+  state.challenges = state.challenges.filter((item) => item.purpose !== "register");
+  if (moved || state.challenges.length !== pendingCodes) persist(state);
   if (!session) {
     state.currentUserId = null;
     state.currentSessionId = null;

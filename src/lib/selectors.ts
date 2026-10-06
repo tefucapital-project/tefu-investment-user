@@ -158,7 +158,7 @@ export function findReceipt(state: AppState, userId: string, ref: string) {
 export function homePath(user: User | null) {
   if (!user) return "/login";
   if (user.status === "suspended") return "/suspended";
-  if (user.status === "otp_pending") return "/verify";
+  if (user.status === "otp_pending") return "/onboarding/fee";
   if (!user.feePaidAt || user.status === "kyc_locked") return "/onboarding/fee";
   if (user.status === "active" || user.status === "kyc_approved") return "/dashboard";
   return "/kyc";

@@ -138,7 +138,7 @@ function refreshKyc(user: User) {
   user.kyc.completion = kycCompletion(user);
   if (user.status === "active" || user.status === "suspended" || user.kyc.status === "approved") return;
   if (!user.feePaidAt) {
-    user.status = user.otpVerifiedAt ? "kyc_locked" : user.status;
+    user.status = "kyc_locked";
     user.kyc.status = "not_started";
     return;
   }
@@ -158,7 +158,7 @@ function activeReady(user: User) {
 export function registerUser(
   state: AppState,
   form: RegisterForm,
-  secrets: { passwordSalt: string; passwordHash: string; otpSalt: string; otpHash: string; otpPreview: string },
+  secrets: { passwordSalt: string; passwordHash: string },
   device: string,
 ): ActionResult<{ sessionId: string }> {
   const firstName = form.firstName.trim();
@@ -191,9 +191,9 @@ export function registerUser(
     referralCode: form.referralCode.trim(),
     termsAcceptedAt: now,
     privacyAcceptedAt: now,
-    status: "otp_pending",
+    status: "kyc_locked",
     createdAt: now,
-    otpVerifiedAt: null,
+    otpVerifiedAt: now,
     feePaidAt: null,
     activatedAt: null,
     pinHash: null,
@@ -208,9 +208,8 @@ export function registerUser(
     notifPrefs: { account: true, payments: true, investments: true, security: true },
   };
   state.users.unshift(user);
-  issueOtp(state, user.id, "register", { hash: secrets.otpHash, salt: secrets.otpSalt, preview: secrets.otpPreview });
   const sessionId = openSession(state, user.id, device);
-  note(state, user.id, "account", "registration", "Account created", "Verify the code sent to your email and phone to continue.");
+  note(state, user.id, "account", "registration", "Account created", "The next step is the Client Onboarding Fee. KYC stays locked until that payment is successful.");
   state.acceptances.unshift({
     id: uid(),
     userId: user.id,
@@ -413,7 +412,6 @@ export function payOnboardingFee(
 ): ActionResult<{ reference: string }> {
   const user = signedIn(state);
   if (!user) return fail("Sign in to continue.");
-  if (!user.otpVerifiedAt) return fail("Verify your email and phone before paying the Client Onboarding Fee.");
   if (user.feePaidAt) return fail("The Client Onboarding Fee has already been paid.");
   if (!method.trim()) return fail("Choose a payment method.");
   const allowed: PaymentStatus[] = ["successful", "failed", "pending", "processing"];

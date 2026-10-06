@@ -117,12 +117,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       async register(form) {
         const passwordSalt = uid();
         const passwordHash = await digest(passwordSalt, form.password);
-        const preview = oneTimeCode();
-        const otpSalt = uid();
-        const otpHash = await digest(otpSalt, preview);
-        return apply((draft) =>
-          registerUser(draft, form, { passwordSalt, passwordHash, otpSalt, otpHash, otpPreview: preview }, deviceLabel()),
-        );
+        return apply((draft) => registerUser(draft, form, { passwordSalt, passwordHash }, deviceLabel()));
       },
       async verifyOtp(code) {
         const current = stateRef.current;

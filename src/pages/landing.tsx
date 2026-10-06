@@ -8,7 +8,6 @@ import { homePath } from "../lib/selectors";
 
 const journey = [
   ["Create an account", "Name, email, phone, and acceptance of the terms and privacy policy."],
-  ["Verify email and phone", "A code is issued, it expires, and repeated wrong attempts are limited."],
   [ONBOARDING_FEE_NAME, "KYC stays locked until this payment is successful."],
   ["Complete KYC", "Personal details, NIN, BVN, a verified bank account, documents, and a photo."],
   ["Fund the wallet", "The wallet is credited only after a deposit is confirmed."],

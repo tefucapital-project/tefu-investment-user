@@ -111,7 +111,6 @@ export function OnboardingShell() {
   if (!user) return <Navigate to="/login" replace />;
   const steps = [
     { label: "Account", done: true },
-    { label: "OTP", done: Boolean(user.otpVerifiedAt) },
     { label: "Client Onboarding Fee", done: Boolean(user.feePaidAt) },
     { label: "KYC", done: user.status === "active" },
   ];
@@ -167,7 +166,7 @@ export function ClientLayout() {
   const { user } = useApp();
   if (!user) return <Navigate to="/login" replace />;
   if (user.status === "suspended") return <Navigate to="/suspended" replace />;
-  if (user.status === "otp_pending") return <Navigate to="/verify" replace />;
+  if (user.status === "otp_pending") return <Navigate to="/onboarding/fee" replace />;
   if (user.status === "active" || user.status === "kyc_approved") return <AppShell />;
   return <OnboardingShell />;
 }

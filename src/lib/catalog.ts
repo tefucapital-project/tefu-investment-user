@@ -58,7 +58,7 @@ Tefu provides access to Mudarabah and Ijarah opportunities. Profit and rental fo
 
 The Client Onboarding Fee is a one-time fee required before KYC. Other fees, including any arrangement fee or withdrawal fee, are shown before you confirm the transaction.
 
-You must complete OTP verification, pay the Client Onboarding Fee, and receive KYC approval before your account can invest. Investments are funded only from available wallet balance.
+You must pay the Client Onboarding Fee and receive KYC approval before your account can invest. Investments are funded only from available wallet balance.
 
 You are responsible for the accuracy of the information you submit, including NIN, BVN, and bank details. Verified identity details may be locked against later edits.
 

@@ -81,7 +81,7 @@ function RegisterForm() {
   const set = (key: keyof typeof form) => (value: string) => setForm((current) => ({ ...current, [key]: value }));
 
   return (
-    <AuthFrame title="Create your account" lede="After this, you verify a code, pay the Client Onboarding Fee, and only then begin KYC.">
+    <AuthFrame title="Create your account" lede="After this, you pay the Client Onboarding Fee, and only then begin KYC.">
       <form
         className="space-y-4"
         onSubmit={async (event) => {
@@ -102,7 +102,7 @@ function RegisterForm() {
             setError(result.error);
             return;
           }
-          navigate("/verify");
+          navigate("/onboarding/fee");
         }}
       >
         {error ? <Banner tone="danger">{error}</Banner> : null}
@@ -140,6 +140,7 @@ export function OtpPage() {
   const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
   const registering = user?.status === "otp_pending";
+  if (registering) return <Navigate to="/onboarding/fee" replace />;
   const userId = registering ? user?.id : state.pending2faUserId;
   const purpose = registering ? "register" : "login_2fa";
   const subject = state.users.find((item) => item.id === userId);
