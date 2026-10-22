@@ -1,13 +1,11 @@
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Banner, Button, Empty, PageTitle, Pill, Stat } from "../components/ui";
 import { useClient } from "../context/AppState";
 import { MAX_DEPOSIT, MIN_DEPOSIT, MIN_WITHDRAWAL, WITHDRAWAL_FEE, WITHDRAWAL_FEE_PURPOSE } from "../lib/catalog";
 import { dateTime, maskAccount, naira, roundMoney } from "../lib/format";
 import { PAYMENT_LABEL, TX_LABEL } from "../lib/labels";
 import type { TxType } from "../lib/types";
-
-const depositMethods = ["Debit card", "Bank transfer", "USSD"];
 
 export function WalletPage() {
   const { user, state } = useClient();
@@ -40,28 +38,61 @@ export function WalletPage() {
 }
 
 export function DepositPage() {
-  const { createDeposit } = useClient();
+  const { createDeposit, verifyPayment } = useClient();
+  const [params] = useSearchParams();
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState(depositMethods[0]);
   const [step, setStep] = useState<"form" | "review" | "done">("form");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ reference: string; outcome: "successful" | "failed" } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ reference: string; outcome: "successful" | "failed" | "pending" } | null>(null);
   const value = Number(amount);
   const valid = value >= MIN_DEPOSIT && value <= MAX_DEPOSIT;
+  const returnRef = params.get("reference") || params.get("trxref");
 
-  const confirm = (outcome: "successful" | "failed") => {
-    const response = createDeposit(value, method, outcome);
+  useEffect(() => {
+    if (!returnRef || result) return;
+    let cancelled = false;
+    (async () => {
+      setBusy(true);
+      const verified = await verifyPayment(returnRef);
+      if (cancelled) return;
+      setBusy(false);
+      if (!verified.ok) {
+        setError(verified.error);
+        return;
+      }
+      const status = String(verified.data?.status ?? "").toUpperCase();
+      setResult({
+        reference: returnRef,
+        outcome: status === "SUCCESSFUL" || status === "SUCCESS" ? "successful" : status === "FAILED" ? "failed" : "pending",
+      });
+      setStep("done");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [returnRef, result, verifyPayment]);
+
+  const confirm = async () => {
+    setBusy(true);
+    setError("");
+    const response = await createDeposit(value, "Paystack", "successful");
+    setBusy(false);
     if (!response.ok || !response.data) {
       setError(response.ok ? "The deposit could not be recorded." : response.error);
       return;
     }
-    setResult({ reference: response.data.reference, outcome });
+    if (response.data.checkoutUrl) {
+      window.location.assign(response.data.checkoutUrl);
+      return;
+    }
+    setResult({ reference: response.data.reference, outcome: "pending" });
     setStep("done");
   };
 
   return (
     <div className="mx-auto max-w-xl">
-      <PageTitle title="Deposit" lede="Deposit, enter the amount, choose a method, review the fee, then confirm. The wallet is credited only after a successful payment." />
+      <PageTitle title="Deposit" lede="Enter the amount, review, then pay with Paystack. The wallet is credited only after Paystack confirms the payment." />
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {step === "form" ? (
         <div className="space-y-4 rounded-[2rem] border border-line bg-paper p-6">
@@ -70,29 +101,29 @@ export function DepositPage() {
             <input className="w-full rounded-2xl border border-line px-3 py-2.5" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} />
             <span className="mt-1 block text-xs text-muted">Between {naira(MIN_DEPOSIT)} and {naira(MAX_DEPOSIT)}. Platform fee: {naira(0)}.</span>
           </label>
-          <label className="block text-sm">
-            <span className="mb-1.5 block font-medium">Payment method</span>
-            <select className="w-full rounded-2xl border border-line px-3 py-2.5" value={method} onChange={(event) => setMethod(event.target.value)}>
-              {depositMethods.map((item) => <option key={item}>{item}</option>)}
-            </select>
-          </label>
+          <p className="text-sm text-muted">Payment processor: Paystack (card, bank transfer, USSD).</p>
           <Button disabled={!valid} onClick={() => setStep("review")}>Review</Button>
         </div>
       ) : null}
       {step === "review" ? (
         <div className="space-y-3 rounded-[2rem] border border-line bg-paper p-6 text-sm">
           <p>Amount: {naira(value)}</p>
-          <p>Method: {method}</p>
+          <p>Method: Paystack</p>
           <p>Platform fee: {naira(0)}</p>
           <p>You will receive: {naira(value)} in available balance if the payment succeeds.</p>
-          <Button onClick={() => confirm("successful")}>Confirm payment</Button>
-          <button type="button" className="block text-danger" onClick={() => confirm("failed")}>Simulate a failed payment</button>
+          <Button disabled={busy} onClick={() => void confirm()}>{busy ? "Opening Paystack…" : "Pay with Paystack"}</Button>
         </div>
       ) : null}
       {step === "done" && result ? (
         <div className="rounded-[2rem] border border-line bg-paper p-6">
           <Pill status={result.outcome}>{PAYMENT_LABEL[result.outcome]}</Pill>
-          <p className="mt-3 text-sm">{result.outcome === "successful" ? "The wallet has been credited." : "The wallet was not credited."}</p>
+          <p className="mt-3 text-sm">
+            {result.outcome === "successful"
+              ? "The wallet has been credited."
+              : result.outcome === "failed"
+                ? "The wallet was not credited."
+                : "Waiting for Paystack confirmation."}
+          </p>
           <p className="mt-2 text-sm text-muted">Reference {result.reference}</p>
           <Link to={`/receipts/${result.reference}`} className="mt-4 inline-block text-sm text-canopy">Open receipt</Link>
         </div>

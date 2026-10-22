@@ -29,10 +29,15 @@ import {
   updateProfile,
   verifyOtp,
 } from "../lib/engine";
+import { api as liveApi, ApiError, clearApiTokens, newIdempotencyKey, saveApiTokens, type Checkout, type Tokens } from "../lib/api";
 import { deviceLabel, digest, oneTimeCode, uid } from "../lib/format";
+import { upsertRemoteUser } from "../lib/remoteUser";
 import { allLive } from "../lib/selectors";
 import { freshState, loadState, persist, syncSession } from "../lib/storage";
 import type { ActionResult, AppState, PersonalInfo, RegisterForm, User } from "../lib/types";
+
+type FeeCheckout = { reference: string; checkoutUrl: string | null };
+type DepositCheckout = { reference: string; checkoutUrl: string | null };
 
 interface PinCarry {
   pinOk: boolean;
@@ -55,7 +60,8 @@ interface AppApi {
   changePassword: (current: string, next: string) => Promise<ActionResult>;
   setPin: (pin: string, current?: string) => Promise<ActionResult>;
   setTwoFactor: (enabled: boolean, password: string) => Promise<ActionResult>;
-  payOnboardingFee: (method: string, outcome: "successful" | "failed" | "pending", reference: string) => ActionResult<{ reference: string }>;
+  payOnboardingFee: (method: string, outcome: "successful" | "failed" | "pending", reference: string) => Promise<ActionResult<FeeCheckout>>;
+  verifyPayment: (reference: string) => Promise<ActionResult<{ reference: string; status: string; purpose?: string }>>;
   savePersonal: (info: PersonalInfo) => ActionResult;
   submitNin: (nin: string) => Promise<ActionResult>;
   submitBvn: (bvn: string) => Promise<ActionResult>;
@@ -63,7 +69,7 @@ interface AppApi {
   saveDocument: (input: { docType: string; name: string; dataUrl: string | null }) => ActionResult;
   saveSelfie: (input: { name: string; dataUrl: string | null }) => ActionResult;
   submitKyc: () => ActionResult;
-  createDeposit: (amount: number, method: string, outcome: "successful" | "failed") => ActionResult<{ reference: string }>;
+  createDeposit: (amount: number, method: string, outcome: "successful" | "failed") => Promise<ActionResult<DepositCheckout>>;
   requestWithdrawal: (bankId: string, amount: number, pin: string) => Promise<ActionResult<{ reference: string }>>;
   createInvestment: (input: { opportunityId: string; amount: number; accepted: boolean; pin: string }) => Promise<ActionResult<{ holdingId: string; reference: string }>>;
   createTicket: (subject: string, description: string) => ActionResult;
@@ -115,9 +121,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
       state,
       opportunities: allLive(state),
       async register(form) {
-        const passwordSalt = uid();
-        const passwordHash = await digest(passwordSalt, form.password);
-        return apply((draft) => registerUser(draft, form, { passwordSalt, passwordHash }, deviceLabel()));
+        try {
+          const result = await liveApi<Tokens & { user?: { id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string } }>(
+            "/auth/register",
+            {
+              method: "POST",
+              auth: false,
+              body: JSON.stringify({
+                firstName: form.firstName.trim(),
+                middleName: form.middleName.trim() || undefined,
+                lastName: form.lastName.trim(),
+                email: form.email.trim(),
+                phone: form.phone.trim(),
+                password: form.password,
+                referralCode: form.referralCode.trim() || null,
+                acceptedTerms: form.acceptTerms,
+                acceptedPrivacy: form.acceptPrivacy,
+              }),
+            },
+          );
+          if (result.data.accessToken && result.data.refreshToken) {
+            saveApiTokens(result.data.accessToken, result.data.refreshToken);
+          }
+          const profile =
+            result.data.user ??
+            (
+              await liveApi<{ id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string }>("/profile")
+            ).data;
+          return apply((draft) => {
+            upsertRemoteUser(draft, profile);
+            return { ok: true as const, data: { sessionId: profile.id } };
+          });
+        } catch (error) {
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          const passwordSalt = uid();
+          const passwordHash = await digest(passwordSalt, form.password);
+          return apply((draft) => registerUser(draft, form, { passwordSalt, passwordHash }, deviceLabel()));
+        }
       },
       async verifyOtp(code) {
         const current = stateRef.current;
@@ -141,18 +181,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return apply((draft) => resendOtp(draft, purpose, userId, { hash, salt, preview }));
       },
       async login(email, password) {
-        const existing = stateRef.current.users.find((item) => item.email === email.trim().toLowerCase());
-        const passwordHash = await digest(existing?.passwordSalt ?? "missing-account", password);
-        const matched = Boolean(existing && existing.passwordHash === passwordHash);
-        let otp: { hash: string; salt: string; preview: string } | undefined;
-        if (existing?.twoFactor && matched) {
-          const preview = oneTimeCode();
-          const salt = uid();
-          otp = { hash: await digest(salt, preview), salt, preview };
+        try {
+          const result = await liveApi<Tokens>("/auth/login", {
+            method: "POST",
+            auth: false,
+            body: JSON.stringify({ email: email.trim(), password }),
+          });
+          saveApiTokens(result.data.accessToken, result.data.refreshToken);
+          const [profile, account] = await Promise.all([
+            liveApi<{ id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string }>("/profile"),
+            liveApi<{ onboardingFeePaid: boolean; status: string; canInvest: boolean }>("/account"),
+          ]);
+          return apply((draft) => {
+            upsertRemoteUser(draft, profile.data, {
+              feePaidAt: account.data.onboardingFeePaid ? Date.now() : null,
+            });
+            return { ok: true as const, data: { twoFactor: false, sessionId: profile.data.id } };
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status !== 0) {
+            return { ok: false, error: error.message };
+          }
+          const existing = stateRef.current.users.find((item) => item.email === email.trim().toLowerCase());
+          const passwordHash = await digest(existing?.passwordSalt ?? "missing-account", password);
+          const matched = Boolean(existing && existing.passwordHash === passwordHash);
+          let otp: { hash: string; salt: string; preview: string } | undefined;
+          if (existing?.twoFactor && matched) {
+            const preview = oneTimeCode();
+            const salt = uid();
+            otp = { hash: await digest(salt, preview), salt, preview };
+          }
+          return apply((draft) => loginUser(draft, email, passwordHash, matched, deviceLabel(), otp));
         }
-        return apply((draft) => loginUser(draft, email, passwordHash, matched, deviceLabel(), otp));
       },
       logout() {
+        clearApiTokens();
         apply(logoutUser);
       },
       logoutOthers() {
@@ -198,8 +261,81 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const hash = await digest(user.passwordSalt, password);
         return apply((draft) => setTwoFactor(draft, enabled, hash === user.passwordHash));
       },
-      payOnboardingFee(method, outcome, reference) {
-        return apply((draft) => payOnboardingFee(draft, method, outcome, reference));
+      async payOnboardingFee(method, outcome, reference) {
+        try {
+          const result = await liveApi<{ reference: string; status: string; checkout: Checkout | null }>("/onboarding-fee/initialize", {
+            method: "POST",
+            idempotencyKey: newIdempotencyKey(),
+            body: JSON.stringify({}),
+          });
+          const checkoutUrl = result.data.checkout?.authorizationUrl ?? null;
+          apply((draft) => {
+            const user = draft.users.find((item) => item.id === draft.currentUserId);
+            if (!user) return { ok: false as const, error: "Sign in to continue." };
+            draft.fees.unshift({
+              id: uid(),
+              userId: user.id,
+              feeType: "client_onboarding_fee",
+              name: "Client Onboarding Fee",
+              amount: 5000,
+              status: "pending",
+              paymentMethod: "Paystack",
+              reference: result.data.reference,
+              purpose: "Client onboarding before KYC",
+              createdAt: Date.now(),
+              paidAt: null,
+            });
+            return { ok: true as const };
+          });
+          return { ok: true as const, data: { reference: result.data.reference, checkoutUrl } };
+        } catch (error) {
+          if (error instanceof ApiError) {
+            // Fall back to local demo only when the API is unreachable.
+            if (error.status >= 500 || error.status === 0) {
+              const local = apply((draft) => payOnboardingFee(draft, method, outcome, reference));
+              return local.ok && local.data
+                ? { ok: true as const, data: { reference: local.data.reference, checkoutUrl: null } }
+                : { ok: false as const, error: local.ok ? "Payment could not start." : local.error };
+            }
+            return { ok: false, error: error.message };
+          }
+          const local = apply((draft) => payOnboardingFee(draft, method, outcome, reference));
+          return local.ok && local.data
+            ? { ok: true as const, data: { reference: local.data.reference, checkoutUrl: null } }
+            : { ok: false as const, error: local.ok ? "Payment could not start." : local.error };
+        }
+      },
+      async verifyPayment(reference) {
+        try {
+          const result = await liveApi<{ reference: string; status: string; purpose?: string; amount?: number }>("/payments/verify", {
+            method: "POST",
+            body: JSON.stringify({ reference }),
+          });
+          apply((draft) => {
+            const user = draft.users.find((item) => item.id === draft.currentUserId);
+            if (!user) return { ok: false as const, error: "Sign in to continue." };
+            const status = String(result.data.status).toLowerCase();
+            const paid = status === "successful" || status === "success";
+            const fee = draft.fees.find((item) => item.reference === reference && item.userId === user.id);
+            if (fee) {
+              fee.status = paid ? "successful" : status === "failed" ? "failed" : "pending";
+              fee.paidAt = paid ? Date.now() : null;
+              fee.paymentMethod = "Paystack";
+            }
+            if (paid && result.data.purpose === "ONBOARDING_FEE") {
+              user.feePaidAt = Date.now();
+              if (user.status === "kyc_locked") user.status = "kyc_in_progress";
+            }
+            if (paid && result.data.purpose === "DEPOSIT" && result.data.amount != null) {
+              user.wallet.available += result.data.amount;
+              user.wallet.balance = user.wallet.available + user.wallet.locked;
+            }
+            return { ok: true as const };
+          });
+          return { ok: true as const, data: result.data };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : "Payment verification failed." };
+        }
       },
       savePersonal(info) {
         return apply((draft) => savePersonal(draft, info));
@@ -226,8 +362,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
       submitKyc() {
         return apply(submitKyc);
       },
-      createDeposit(amount, method, outcome) {
-        return apply((draft) => createDeposit(draft, amount, method, outcome));
+      async createDeposit(amount, method, outcome) {
+        try {
+          const result = await liveApi<{ reference: string; status: string; amount: number; checkout: Checkout | null }>("/wallet/deposit", {
+            method: "POST",
+            idempotencyKey: newIdempotencyKey(),
+            body: JSON.stringify({ amount }),
+          });
+          apply((draft) => {
+            const user = draft.users.find((item) => item.id === draft.currentUserId);
+            if (!user) return { ok: false as const, error: "Sign in to continue." };
+            draft.deposits.unshift({
+              id: uid(),
+              userId: user.id,
+              amount,
+              paymentMethod: "Paystack",
+              reference: result.data.reference,
+              status: "pending",
+              createdAt: Date.now(),
+            });
+            return { ok: true as const };
+          });
+          return {
+            ok: true as const,
+            data: { reference: result.data.reference, checkoutUrl: result.data.checkout?.authorizationUrl ?? null },
+          };
+        } catch (error) {
+          if (error instanceof ApiError && error.status < 500 && error.status !== 0) {
+            return { ok: false, error: error.message };
+          }
+          const local = apply((draft) => createDeposit(draft, amount, method, outcome));
+          return local.ok && local.data
+            ? { ok: true as const, data: { reference: local.data.reference, checkoutUrl: null } }
+            : { ok: false as const, error: local.ok ? "Deposit could not start." : local.error };
+        }
       },
       async requestWithdrawal(bankId, amount, pin) {
         const resolved = await resolvePin(pin);
