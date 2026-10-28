@@ -42,7 +42,8 @@ export function upsertRemoteUser(
     existing.middleName = remote.middleName ?? existing.middleName;
     existing.lastName = remote.lastName;
     existing.status = status;
-    if (extras?.feePaidAt != null) existing.feePaidAt = extras.feePaidAt;
+    // Always trust the API fee flag so a past demo "paid" state cannot skip Paystack.
+    if (extras && "feePaidAt" in extras) existing.feePaidAt = extras.feePaidAt ?? null;
     if (status === "active" && !existing.activatedAt) existing.activatedAt = Date.now();
     state.currentUserId = existing.id;
     return existing;

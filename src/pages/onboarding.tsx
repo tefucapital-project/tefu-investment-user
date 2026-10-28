@@ -43,8 +43,28 @@ export function AccountOnboardingPage() {
 }
 
 export function FeeIntroPage() {
-  const { user, state } = useClient();
+  const { user, state, syncOnboardingFee } = useClient();
+  const [syncing, setSyncing] = useState(true);
+  const [syncError, setSyncError] = useState("");
   const latest = state.fees.find((item) => item.userId === user.id && item.feeType === "client_onboarding_fee");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setSyncing(true);
+      setSyncError("");
+      const result = await syncOnboardingFee();
+      if (cancelled) return;
+      if (!result.ok) setSyncError(result.error);
+      setSyncing(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Sync once when this account lands on the fee page — not on every state rewrite.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- syncOnboardingFee identity changes with state
+  }, [user.id]);
+
   return (
     <div className="mx-auto max-w-2xl">
       <PageTitle
@@ -52,22 +72,40 @@ export function FeeIntroPage() {
         title={ONBOARDING_FEE_NAME}
         lede="This payment is required before identity verification can begin."
       />
-      <Banner>{KYC_LOCK_MESSAGE}</Banner>
+      {user.feePaidAt ? (
+        <Banner tone="ok">Client Onboarding Fee is paid. You can continue to KYC.</Banner>
+      ) : (
+        <Banner>{KYC_LOCK_MESSAGE}</Banner>
+      )}
+      {syncError ? (
+        <div className="mt-3">
+          <Banner tone="danger">{syncError}</Banner>
+        </div>
+      ) : null}
       <div className="mt-5 rounded-[2rem] border border-line bg-paper p-6">
         <dl className="space-y-3 text-sm">
           <Row label="Fee name" value={ONBOARDING_FEE_NAME} />
           <Row label="Amount" value={naira(ONBOARDING_FEE_AMOUNT)} />
           <Row label="Purpose" value={ONBOARDING_FEE_PURPOSE} />
-          <Row label="KYC" value={user.feePaidAt ? "Unlocked" : "Locked"} />
+          <Row label="KYC" value={user.feePaidAt ? "Unlocked" : syncing ? "Checking…" : "Locked"} />
           <Row label="Processor" value="Paystack" />
         </dl>
         <div className="mt-6 flex flex-wrap gap-3">
           {user.feePaidAt ? (
-            <Link to="/kyc" className="inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Continue to KYC</Link>
+            <Link to="/kyc" className="inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">
+              Continue to KYC
+            </Link>
           ) : (
-            <Link to="/onboarding/fee/pay" className="inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Pay {naira(ONBOARDING_FEE_AMOUNT)}</Link>
+            <Link
+              to="/onboarding/fee/pay"
+              className={`inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2 ${syncing ? "pointer-events-none opacity-60" : ""}`}
+            >
+              {syncing ? "Checking payment…" : `Pay ${naira(ONBOARDING_FEE_AMOUNT)} with Paystack`}
+            </Link>
           )}
-          <Link to="/onboarding/account" className="inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">Back to Account</Link>
+          <Link to="/onboarding/account" className="inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">
+            Back to Account
+          </Link>
         </div>
       </div>
       {latest ? (
@@ -81,9 +119,32 @@ export function FeeIntroPage() {
 }
 
 export function FeePayPage() {
-  const { user, payOnboardingFee } = useClient();
+  const { user, payOnboardingFee, syncOnboardingFee } = useClient();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      await syncOnboardingFee();
+      if (!cancelled) setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync once per visit
+  }, [user.id]);
+
+  if (!ready) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <PageTitle eyebrow="Payment" title="Pay the Client Onboarding Fee" lede="Confirming whether this fee is already paid…" />
+        <Banner>Checking payment status with Tefu…</Banner>
+      </div>
+    );
+  }
+
   if (user.feePaidAt) return <FeeIntroPage />;
 
   const pay = async () => {

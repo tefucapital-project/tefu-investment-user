@@ -27,7 +27,7 @@ import {
 } from "../lib/engine";
 import { api as liveApi, ApiError, clearApiTokens, newIdempotencyKey, saveApiTokens, type Checkout, type Tokens } from "../lib/api";
 import { deviceLabel, digest, oneTimeCode, uid } from "../lib/format";
-import { upsertRemoteUser } from "../lib/remoteUser";
+import { mapAccountStatus, upsertRemoteUser } from "../lib/remoteUser";
 import { allLive } from "../lib/selectors";
 import { freshState, loadState, persist, syncSession } from "../lib/storage";
 import type { ActionResult, AppState, PersonalInfo, RegisterForm, User } from "../lib/types";
@@ -57,6 +57,7 @@ interface AppApi {
   setPin: (pin: string, current?: string) => Promise<ActionResult>;
   setTwoFactor: (enabled: boolean, password: string) => Promise<ActionResult>;
   payOnboardingFee: (method: string, outcome: "successful" | "failed" | "pending", reference: string) => Promise<ActionResult<FeeCheckout>>;
+  syncOnboardingFee: () => Promise<ActionResult<{ paid: boolean }>>;
   verifyPayment: (reference: string) => Promise<ActionResult<{ reference: string; status: string; purpose?: string }>>;
   savePersonal: (info: PersonalInfo) => ActionResult;
   submitNin: (nin: string) => Promise<ActionResult>;
@@ -147,7 +148,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               await liveApi<{ id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string }>("/profile")
             ).data;
           return apply((draft) => {
-            upsertRemoteUser(draft, profile);
+            upsertRemoteUser(draft, profile, { feePaidAt: null });
             return { ok: true as const, data: { sessionId: profile.id } };
           });
         } catch (error) {
@@ -287,6 +288,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return {
             ok: false,
             error: error instanceof Error ? error.message : "Could not start Paystack payment. Try again.",
+          };
+        }
+      },
+      async syncOnboardingFee() {
+        try {
+          const account = await liveApi<{ onboardingFeePaid: boolean; status: string }>("/account");
+          const paid = Boolean(account.data.onboardingFeePaid);
+          apply((draft) => {
+            const user = draft.users.find((item) => item.id === draft.currentUserId);
+            if (!user) return { ok: false as const, error: "Sign in to continue." };
+            user.feePaidAt = paid ? user.feePaidAt ?? Date.now() : null;
+            user.status = mapAccountStatus(account.data.status);
+            return { ok: true as const };
+          });
+          return { ok: true as const, data: { paid } };
+        } catch (error) {
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not verify Client Onboarding Fee status.",
           };
         }
       },
