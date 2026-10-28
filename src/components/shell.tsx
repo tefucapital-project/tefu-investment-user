@@ -1,6 +1,6 @@
 import { Bell, Briefcase, Building2, Coins, FolderOpen, LayoutDashboard, LifeBuoy, LogOut, Menu, PieChart, Receipt, Shield, Sprout, Wallet, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { NavLink, Navigate, Outlet } from "react-router-dom";
+import { NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppState";
 import { naira } from "../lib/format";
 import { homePath, visibleNotifications } from "../lib/selectors";
@@ -108,27 +108,48 @@ export function AppShell() {
 
 export function OnboardingShell() {
   const { user, logout } = useApp();
+  const location = useLocation();
   if (!user) return <Navigate to="/login" replace />;
   const steps = [
-    { label: "Account", done: true },
-    { label: "Client Onboarding Fee", done: Boolean(user.feePaidAt) },
-    { label: "KYC", done: user.status === "active" },
+    { label: "Account", to: "/onboarding/account", done: true, match: (path: string) => path.startsWith("/onboarding/account") || path === "/security" },
+    { label: "Client Onboarding Fee", to: "/onboarding/fee", done: Boolean(user.feePaidAt), match: (path: string) => path.startsWith("/onboarding/fee") },
+    { label: "KYC", to: user.feePaidAt ? "/kyc" : "/onboarding/fee", done: user.status === "active" || user.status === "kyc_approved", match: (path: string) => path.startsWith("/kyc") },
   ];
   return (
     <div className="min-h-screen bg-cream">
       <header className="border-b border-line bg-paper">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-4">
           <Logo />
-          <button type="button" onClick={logout} className="text-sm text-muted">Log out</button>
+          <div className="flex items-center gap-3">
+            <NavLink to="/onboarding/account" className="text-sm text-canopy">
+              Account
+            </NavLink>
+            <NavLink to="/security" className="text-sm text-muted hover:text-forest">
+              Security
+            </NavLink>
+            <button type="button" onClick={logout} className="text-sm text-muted">
+              Log out
+            </button>
+          </div>
         </div>
       </header>
       <div className="mx-auto max-w-5xl px-4 py-6">
         <ol className="mb-6 flex flex-wrap gap-2">
-          {steps.map((step) => (
-            <li key={step.label} className={`rounded-full px-3 py-1 text-xs ${step.done ? "bg-forest text-gold2" : "bg-paper text-muted"}`}>
-              {step.label}
-            </li>
-          ))}
+          {steps.map((step) => {
+            const active = step.match(location.pathname);
+            return (
+              <li key={step.label}>
+                <NavLink
+                  to={step.to}
+                  className={`rounded-full px-3 py-1 text-xs transition ${
+                    active ? "bg-canopy text-white" : step.done ? "bg-forest text-gold2 hover:opacity-90" : "bg-paper text-muted hover:bg-line/60"
+                  }`}
+                >
+                  {step.label}
+                </NavLink>
+              </li>
+            );
+          })}
         </ol>
         <Outlet />
       </div>

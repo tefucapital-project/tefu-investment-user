@@ -8,7 +8,7 @@ import { ConfirmPage, HoldingPage, IjarahListPage, MudarabahListPage, MyInvestme
 import { KycBank, KycBvn, KycDocs, KycHome, KycNin, KycPersonal, KycReview, KycSelfie, KycStatus } from "./pages/kyc";
 import { LandingPage } from "./pages/landing";
 import { DepositPage, NotFoundPage, TransactionsPage, WalletPage, WithdrawPage } from "./pages/money";
-import { FeeIntroPage, FeePayPage, FeeResultPage } from "./pages/onboarding";
+import { AccountOnboardingPage, FeeIntroPage, FeePayPage, FeeResultPage } from "./pages/onboarding";
 import { RecoverDemoPage } from "./pages/recover-demo";
 import { AgreementsPage, DocumentsPage, FeesPage, PortfolioPage, ProfitsPage, ReceiptPage, ReceiptsPage } from "./pages/records";
 
@@ -26,11 +26,13 @@ export default function App() {
           <Route path="/verify" element={<OtpPage />} />
           <Route path="/suspended" element={<SuspendedPage />} />
           <Route element={<ClientLayout />}>
+            <Route path="/onboarding/account" element={<AccountOnboardingPage />} />
             <Route path="/onboarding/fee" element={<FeeIntroPage />} />
             <Route path="/onboarding/fee/pay" element={<FeePayPage />} />
             <Route path="/onboarding/fee/success" element={<FeeResultPage outcome="successful" />} />
             <Route path="/onboarding/fee/failed" element={<FeeResultPage outcome="failed" />} />
             <Route path="/onboarding/fee/pending" element={<FeeResultPage outcome="pending" />} />
+            <Route path="/security" element={<SecurityPage />} />
             <Route element={<RequireFee />}>
               <Route path="/kyc" element={<KycHome />} />
               <Route path="/kyc/personal" element={<KycPersonal />} />
@@ -66,7 +68,6 @@ export default function App() {
               <Route path="/receipts/:reference" element={<ReceiptPage />} />
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/banks" element={<BanksPage />} />
-              <Route path="/security" element={<SecurityPage />} />
               <Route path="/support" element={<SupportPage />} />
             </Route>
           </Route>

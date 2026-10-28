@@ -31,6 +31,21 @@ export function KycFrame({ children }: { children: ReactNode }) {
           <div className="h-full bg-forest" style={{ width: `${user.kyc.completion}%` }} />
         </div>
         <ul className="mt-4 space-y-1">
+          <li>
+            <Link to="/onboarding/account" className="block rounded-2xl px-3 py-2 text-sm text-canopy hover:bg-cream">
+              ← Back to Account
+            </Link>
+          </li>
+          <li>
+            <Link to="/onboarding/fee" className="block rounded-2xl px-3 py-2 text-sm hover:bg-cream">
+              Client Onboarding Fee
+            </Link>
+          </li>
+          <li>
+            <Link to="/kyc" className="block rounded-2xl px-3 py-2 text-sm hover:bg-cream">
+              KYC overview
+            </Link>
+          </li>
           {steps(user).map((step) => (
             <li key={step.to}>
               <Link to={step.to} className="block rounded-2xl px-3 py-2 hover:bg-cream">

@@ -3,9 +3,44 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Banner, Button, PageTitle, Pill } from "../components/ui";
 import { useClient } from "../context/AppState";
 import { ONBOARDING_FEE_AMOUNT, ONBOARDING_FEE_NAME, ONBOARDING_FEE_PURPOSE } from "../lib/catalog";
-import { dateTime, naira } from "../lib/format";
+import { dateTime, fullName, naira } from "../lib/format";
 import { KYC_LOCK_MESSAGE, PAYMENT_LABEL } from "../lib/labels";
 import type { PaymentStatus } from "../lib/types";
+
+export function AccountOnboardingPage() {
+  const { user } = useClient();
+  return (
+    <div className="mx-auto max-w-2xl">
+      <PageTitle
+        eyebrow="Account"
+        title="Your Tefu account"
+        lede="You can return here any time during onboarding if you need to check your details before paying the fee or finishing KYC."
+      />
+      <div className="rounded-[2rem] border border-line bg-paper p-6 text-sm">
+        <dl className="space-y-3">
+          <Row label="Name" value={fullName(user)} />
+          <Row label="Email" value={user.email} />
+          <Row label="Phone" value={user.phone || "Not set"} />
+          <Row label="Account status" value={user.status.replaceAll("_", " ")} />
+          <Row label="Client Onboarding Fee" value={user.feePaidAt ? "Paid" : "Not paid"} />
+        </dl>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link to="/onboarding/fee" className="inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">
+            {user.feePaidAt ? "View onboarding fee" : "Continue to fee"}
+          </Link>
+          {user.feePaidAt ? (
+            <Link to="/kyc" className="inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">
+              Go to KYC
+            </Link>
+          ) : null}
+          <Link to="/security" className="inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">
+            Security
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function FeeIntroPage() {
   const { user, state } = useClient();
@@ -26,11 +61,14 @@ export function FeeIntroPage() {
           <Row label="KYC" value={user.feePaidAt ? "Unlocked" : "Locked"} />
           <Row label="Processor" value="Paystack" />
         </dl>
-        {user.feePaidAt ? (
-          <Link to="/kyc" className="mt-6 inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Continue to KYC</Link>
-        ) : (
-          <Link to="/onboarding/fee/pay" className="mt-6 inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Pay {naira(ONBOARDING_FEE_AMOUNT)}</Link>
-        )}
+        <div className="mt-6 flex flex-wrap gap-3">
+          {user.feePaidAt ? (
+            <Link to="/kyc" className="inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Continue to KYC</Link>
+          ) : (
+            <Link to="/onboarding/fee/pay" className="inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Pay {naira(ONBOARDING_FEE_AMOUNT)}</Link>
+          )}
+          <Link to="/onboarding/account" className="inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">Back to Account</Link>
+        </div>
       </div>
       {latest ? (
         <p className="mt-4 text-sm text-muted">
