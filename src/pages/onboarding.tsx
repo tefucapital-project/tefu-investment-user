@@ -58,11 +58,11 @@ export function FeePayPage() {
       setError(result.ok ? "Payment could not start." : result.error);
       return;
     }
-    if (result.data.checkoutUrl) {
-      window.location.assign(result.data.checkoutUrl);
+    if (!result.data.checkoutUrl) {
+      setError("Paystack checkout did not open. Confirm the API is in paystack mode and try again.");
       return;
     }
-    navigate(`/onboarding/fee/pending?reference=${encodeURIComponent(result.data.reference)}`);
+    window.location.assign(result.data.checkoutUrl);
   };
 
   return (

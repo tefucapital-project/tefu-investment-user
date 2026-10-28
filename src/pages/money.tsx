@@ -82,12 +82,11 @@ export function DepositPage() {
       setError(response.ok ? "The deposit could not be recorded." : response.error);
       return;
     }
-    if (response.data.checkoutUrl) {
-      window.location.assign(response.data.checkoutUrl);
+    if (!response.data.checkoutUrl) {
+      setError("Paystack checkout did not open. Confirm the API is in paystack mode and try again.");
       return;
     }
-    setResult({ reference: response.data.reference, outcome: "pending" });
-    setStep("done");
+    window.location.assign(response.data.checkoutUrl);
   };
 
   return (

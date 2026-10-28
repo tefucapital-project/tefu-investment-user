@@ -56,12 +56,22 @@ export async function api<T>(path: string, init?: RequestInit & { idempotencyKey
   const token = localStorage.getItem(ACCESS_KEY);
   if (auth && token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(`${apiRoot()}${path}`, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(`${apiRoot()}${path}`, { ...init, headers });
+  } catch {
+    throw new ApiError("Could not reach the Tefu API. Check your connection and try again.", 0, "NETWORK");
+  }
   if (response.status === 401 && auth && localStorage.getItem(REFRESH_KEY)) {
     const refreshed = await refreshSession();
     if (refreshed) {
       headers.set("Authorization", `Bearer ${localStorage.getItem(ACCESS_KEY)}`);
-      return parse<T>(await fetch(`${apiRoot()}${path}`, { ...init, headers }));
+      try {
+        return parse<T>(await fetch(`${apiRoot()}${path}`, { ...init, headers }));
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        throw new ApiError("Could not reach the Tefu API. Check your connection and try again.", 0, "NETWORK");
+      }
     }
   }
   return parse<T>(response);

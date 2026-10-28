@@ -2,16 +2,12 @@ import { createContext, useContext, useMemo, useRef, useState, type ReactNode } 
 import {
   changePassword,
   closeTicket,
-  createDeposit,
   createInvestment,
   createTicket,
-  loginUser,
   logoutOthers,
   logoutUser,
   markAllRead,
   markRead,
-  payOnboardingFee,
-  registerUser,
   requestReset,
   requestWithdrawal,
   resendOtp,
@@ -154,9 +150,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         } catch (error) {
           if (error instanceof ApiError) return { ok: false, error: error.message };
-          const passwordSalt = uid();
-          const passwordHash = await digest(passwordSalt, form.password);
-          return apply((draft) => registerUser(draft, form, { passwordSalt, passwordHash }, deviceLabel()));
+          // Never create a browser-only account when the API call fails — those users never appear in admin.
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not reach the registration service. Try again.",
+          };
         }
       },
       async verifyOtp(code) {
@@ -199,19 +197,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             return { ok: true as const, data: { twoFactor: false, sessionId: profile.data.id } };
           });
         } catch (error) {
-          if (error instanceof ApiError && error.status !== 0) {
-            return { ok: false, error: error.message };
+          if (error instanceof ApiError) {
+            return { ok: false, error: error.message || "Email or password is incorrect." };
           }
-          const existing = stateRef.current.users.find((item) => item.email === email.trim().toLowerCase());
-          const passwordHash = await digest(existing?.passwordSalt ?? "missing-account", password);
-          const matched = Boolean(existing && existing.passwordHash === passwordHash);
-          let otp: { hash: string; salt: string; preview: string } | undefined;
-          if (existing?.twoFactor && matched) {
-            const preview = oneTimeCode();
-            const salt = uid();
-            otp = { hash: await digest(salt, preview), salt, preview };
-          }
-          return apply((draft) => loginUser(draft, email, passwordHash, matched, deviceLabel(), otp));
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not reach the sign-in service. Try again.",
+          };
         }
       },
       logout() {
@@ -289,20 +281,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
           return { ok: true as const, data: { reference: result.data.reference, checkoutUrl } };
         } catch (error) {
-          if (error instanceof ApiError) {
-            // Fall back to local demo only when the API is unreachable.
-            if (error.status >= 500 || error.status === 0) {
-              const local = apply((draft) => payOnboardingFee(draft, method, outcome, reference));
-              return local.ok && local.data
-                ? { ok: true as const, data: { reference: local.data.reference, checkoutUrl: null } }
-                : { ok: false as const, error: local.ok ? "Payment could not start." : local.error };
-            }
-            return { ok: false, error: error.message };
-          }
-          const local = apply((draft) => payOnboardingFee(draft, method, outcome, reference));
-          return local.ok && local.data
-            ? { ok: true as const, data: { reference: local.data.reference, checkoutUrl: null } }
-            : { ok: false as const, error: local.ok ? "Payment could not start." : local.error };
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not start Paystack payment. Try again.",
+          };
         }
       },
       async verifyPayment(reference) {
@@ -388,13 +371,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
             data: { reference: result.data.reference, checkoutUrl: result.data.checkout?.authorizationUrl ?? null },
           };
         } catch (error) {
-          if (error instanceof ApiError && error.status < 500 && error.status !== 0) {
-            return { ok: false, error: error.message };
-          }
-          const local = apply((draft) => createDeposit(draft, amount, method, outcome));
-          return local.ok && local.data
-            ? { ok: true as const, data: { reference: local.data.reference, checkoutUrl: null } }
-            : { ok: false as const, error: local.ok ? "Deposit could not start." : local.error };
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not start Paystack deposit. Try again.",
+          };
         }
       },
       async requestWithdrawal(bankId, amount, pin) {

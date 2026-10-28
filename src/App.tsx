@@ -9,6 +9,7 @@ import { KycBank, KycBvn, KycDocs, KycHome, KycNin, KycPersonal, KycReview, KycS
 import { LandingPage } from "./pages/landing";
 import { DepositPage, NotFoundPage, TransactionsPage, WalletPage, WithdrawPage } from "./pages/money";
 import { FeeIntroPage, FeePayPage, FeeResultPage } from "./pages/onboarding";
+import { RecoverDemoPage } from "./pages/recover-demo";
 import { AgreementsPage, DocumentsPage, FeesPage, PortfolioPage, ProfitsPage, ReceiptPage, ReceiptsPage } from "./pages/records";
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/recover-demo" element={<RecoverDemoPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPage />} />
