@@ -82,7 +82,6 @@ export function FeeIntroPage() {
 
 export function FeePayPage() {
   const { user, payOnboardingFee } = useClient();
-  const navigate = useNavigate();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   if (user.feePaidAt) return <FeeIntroPage />;
@@ -124,25 +123,21 @@ export function FeeResultPage({ outcome }: { outcome: PaymentStatus }) {
   const { user, state, verifyPayment } = useClient();
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const [checking, setChecking] = useState(Boolean(params.get("reference") || params.get("trxref")));
   const [error, setError] = useState("");
   const [verifiedOnce, setVerifiedOnce] = useState(false);
   const reference = params.get("reference") || params.get("trxref") || "";
   const fee = state.fees.find((item) => item.userId === user.id && item.feeType === "client_onboarding_fee" && (reference ? item.reference === reference : item.status === outcome));
+  const checking = Boolean(reference) && !verifiedOnce && !error;
 
   useEffect(() => {
-    if (!reference || verifiedOnce) {
-      setChecking(false);
-      return;
-    }
+    if (!reference || verifiedOnce) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       const result = await verifyPayment(reference);
       if (cancelled) return;
       setVerifiedOnce(true);
       if (!result.ok) {
         setError(result.error);
-        setChecking(false);
         return;
       }
       const status = String(result.data?.status ?? "").toUpperCase();
@@ -153,7 +148,6 @@ export function FeeResultPage({ outcome }: { outcome: PaymentStatus }) {
             ? "failed"
             : "pending";
       navigate(`/onboarding/fee/${target}?reference=${encodeURIComponent(reference)}`, { replace: true });
-      setChecking(false);
     })();
     return () => {
       cancelled = true;

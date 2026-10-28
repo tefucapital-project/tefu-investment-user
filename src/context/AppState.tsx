@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   changePassword,
   closeTicket,
@@ -82,7 +82,9 @@ const AppContext = createContext<AppApi | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(loadState);
   const stateRef = useRef(state);
-  stateRef.current = state;
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const apply = <T,>(fn: (draft: AppState) => ActionResult<T>): ActionResult<T> => {
     const draft = structuredClone(stateRef.current);
@@ -253,7 +255,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const hash = await digest(user.passwordSalt, password);
         return apply((draft) => setTwoFactor(draft, enabled, hash === user.passwordHash));
       },
-      async payOnboardingFee(method, outcome, reference) {
+      async payOnboardingFee(_method, _outcome, _reference) {
         try {
           const result = await liveApi<{ reference: string; status: string; checkout: Checkout | null }>("/onboarding-fee/initialize", {
             method: "POST",
@@ -345,7 +347,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       submitKyc() {
         return apply(submitKyc);
       },
-      async createDeposit(amount, method, outcome) {
+      async createDeposit(amount, _method, _outcome) {
         try {
           const result = await liveApi<{ reference: string; status: string; amount: number; checkout: Checkout | null }>("/wallet/deposit", {
             method: "POST",
