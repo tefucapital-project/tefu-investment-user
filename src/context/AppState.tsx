@@ -457,11 +457,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return apply((draft) => savePersonal(draft, info));
       },
       async submitNin(nin) {
+        const typed = nin.replace(/\D/g, "");
+        if (!/^\d{11}$/.test(typed)) {
+          return { ok: false as const, error: "Enter the 11-digit NIN yourself. Phone number cannot be used." };
+        }
         if (hasApiSession()) {
           try {
             const result = await liveApi<RemoteKycView>("/kyc/nin/verify", {
               method: "POST",
-              body: JSON.stringify({ nin, consent: true }),
+              body: JSON.stringify({ nin: typed, consent: true }),
             });
             apply((draft) => {
               const user = draft.users.find((item) => item.id === draft.currentUserId);
@@ -476,15 +480,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
         const salt = uid();
-        const hash = await digest(salt, nin);
-        return apply((draft) => submitNin(draft, nin, hash));
+        const hash = await digest(salt, typed);
+        return apply((draft) => submitNin(draft, typed, hash));
       },
       async submitBvn(bvn) {
+        const typed = bvn.replace(/\D/g, "");
+        if (!/^\d{11}$/.test(typed)) {
+          return { ok: false as const, error: "Enter the 11-digit BVN yourself. Phone number cannot be used." };
+        }
         if (hasApiSession()) {
           try {
             const result = await liveApi<RemoteKycView>("/kyc/bvn/verify", {
               method: "POST",
-              body: JSON.stringify({ bvn, consent: true }),
+              body: JSON.stringify({ bvn: typed, consent: true }),
             });
             apply((draft) => {
               const user = draft.users.find((item) => item.id === draft.currentUserId);
@@ -499,8 +507,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
         const salt = uid();
-        const hash = await digest(salt, bvn);
-        return apply((draft) => submitBvn(draft, bvn, hash));
+        const hash = await digest(salt, typed);
+        return apply((draft) => submitBvn(draft, typed, hash));
       },
       async saveBank(input) {
         if (hasApiSession()) {

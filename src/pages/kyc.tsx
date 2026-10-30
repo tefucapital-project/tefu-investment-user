@@ -162,20 +162,27 @@ function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
   const [busy, setBusy] = useState(false);
   if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   const locked = record.status === "verified";
+  const digits = value.replace(/\D/g, "");
+  const canSubmit = user.kyc.personalComplete && /^\d{11}$/.test(digits);
   return (
     <KycFrame>
       <PageTitle
         title={`${kind} verification`}
-        lede={`${kind} is part of KYC. The number is masked after you submit it.`}
+        lede={`Type your 11-digit ${kind}. Your phone number is never used for this check.`}
       />
       {!user.kyc.personalComplete ? <Banner>Complete personal information before this check.</Banner> : null}
       <form
         className="mt-4 space-y-4 rounded-[2rem] border border-line bg-paper p-6"
         onSubmit={async (event) => {
           event.preventDefault();
+          const typed = value.replace(/\D/g, "");
+          if (!/^\d{11}$/.test(typed)) {
+            setError(`Enter the full 11-digit ${kind}. Verification does not use your phone number.`);
+            return;
+          }
           setBusy(true);
-          await new Promise((resolve) => setTimeout(resolve, 600));
-          const result = kind === "NIN" ? await submitNin(value) : await submitBvn(value);
+          setError("");
+          const result = kind === "NIN" ? await submitNin(typed) : await submitBvn(typed);
           setBusy(false);
           setError(result.ok ? "" : result.error);
           if (result.ok) setValue("");
@@ -183,15 +190,23 @@ function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
       >
         <Pill status={record.status}>{VERIFY_LABEL[record.status]}</Pill>
         {record.reason ? <p className="text-sm leading-6">{record.reason}</p> : null}
-        {record.last4 ? <p className="text-sm text-muted">Submitted number {maskId(record.last4)} · {record.reference}</p> : null}
+        {record.last4 ? <p className="text-sm text-muted">Submitted number {maskId(record.last4)}</p> : null}
         {error ? <Banner tone="danger">{error}</Banner> : null}
         {locked ? <Banner tone="ok">This check is verified and cannot be edited here.</Banner> : (
           <>
-            <TextField label={`${kind} number`} value={value} onChange={setValue} placeholder="11 digits" />
+            <TextField
+              label={`${kind} number`}
+              value={value}
+              onChange={(next) => setValue(next.replace(/\D/g, "").slice(0, 11))}
+              placeholder="11 digits"
+              autoComplete="off"
+            />
             <p className="text-xs leading-5 text-muted">
-              This MVP checks the number on your device. A {kind} starting with {kind === "NIN" ? "000" : "999"} fails. One ending in {kind === "NIN" ? "1111" : "2222"} requires an update. Any other 11-digit number is verified against your profile name.
+              You must type the {kind} yourself. Tefu matches it to your legal name and date of birth through Otobill — not your phone number.
             </p>
-            <Button type="submit" disabled={busy || !user.kyc.personalComplete}>{busy ? "Verifying…" : `Submit ${kind}`}</Button>
+            <Button type="submit" disabled={busy || !canSubmit}>
+              {busy ? "Verifying…" : `Submit ${kind}`}
+            </Button>
           </>
         )}
       </form>
