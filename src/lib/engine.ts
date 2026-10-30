@@ -137,6 +137,8 @@ function openSession(state: AppState, userId: string, device: string) {
 function refreshKyc(user: User) {
   user.kyc.completion = kycCompletion(user);
   if (user.status === "active" || user.status === "suspended" || user.kyc.status === "approved") return;
+  if (user.status === "kyc_pending_review" || user.kyc.status === "pending_review") return;
+  if (user.status === "kyc_rejected" || user.kyc.status === "rejected") return;
   if (!user.feePaidAt) {
     user.status = "kyc_locked";
     user.kyc.status = "not_started";
@@ -667,35 +669,39 @@ export function submitKyc(state: AppState): ActionResult {
   const user = signedIn(state);
   if (!user) return fail("Sign in to continue.");
   if (!user.feePaidAt) return fail("Complete your Client Onboarding Fee payment to begin KYC verification.");
+  if (user.status === "kyc_pending_review" || user.kyc.status === "pending_review") {
+    return fail("Your KYC is already waiting for admin approval.");
+  }
+  if (user.status === "active" || user.kyc.status === "approved") {
+    return fail("KYC is already approved.");
+  }
   refreshKyc(user);
   const bank = user.banks.find((item) => item.id === user.kyc.bankAccountId);
   if (!user.kyc.personalComplete) return fail("Personal information is incomplete.");
-  if (user.kyc.nin.status !== "verified") return fail("NIN verification is required before KYC can be approved.");
-  if (user.kyc.bvn.status !== "verified") return fail("BVN verification is required before KYC can be approved.");
-  if (bank?.status !== "verified") return fail("A verified bank account is required before KYC can be approved.");
+  if (user.kyc.nin.status !== "verified") return fail("NIN verification is required before KYC can be submitted.");
+  if (user.kyc.bvn.status !== "verified") return fail("BVN verification is required before KYC can be submitted.");
+  if (bank?.status !== "verified") return fail("A verified bank account is required before KYC can be submitted.");
   if (user.kyc.document.status === "not_started") return fail("Upload an identification document.");
   if (user.kyc.selfie.status === "not_started") return fail("Upload an identity photo.");
   const now = Date.now();
   user.kyc.submittedAt = now;
-  user.kyc.events.push({ status: "Pending Review", at: now, note: "All required KYC information was submitted." });
-  user.kyc.status = "approved";
-  user.kyc.approvedAt = now;
-  user.kyc.completion = 100;
+  user.kyc.approvedAt = null;
   user.kyc.rejectionReason = "";
-  user.kyc.document.status = "verified";
-  user.kyc.selfie.status = "verified";
-  user.status = "active";
-  user.activatedAt = now;
+  user.kyc.status = "pending_review";
+  user.status = "kyc_pending_review";
   user.kyc.events.push({
-    status: "Approved",
+    status: "Pending Review",
     at: now,
-    note: "NIN, BVN, bank, and documents passed. This user MVP approves a complete file immediately because compliance review sits outside this version.",
+    note: "KYC was submitted. An admin must approve it before you can use the investment account.",
   });
-  const doc = state.documents.find((item) => item.id === user.kyc.document.id);
-  const selfie = state.documents.find((item) => item.id === user.kyc.selfie.id);
-  if (doc) doc.status = "verified";
-  if (selfie) selfie.status = "verified";
-  note(state, user.id, "account", "kyc", "KYC approved", "Your investment account is active. Fund your wallet when you are ready to invest.");
+  note(
+    state,
+    user.id,
+    "account",
+    "kyc",
+    "KYC submitted for review",
+    "Your file is with Tefu compliance. You cannot deposit or invest until an admin approves your KYC.",
+  );
   return ok();
 }
 

@@ -113,7 +113,7 @@ export function OnboardingShell() {
   const steps = [
     { label: "Account", to: "/onboarding/account", done: true, match: (path: string) => path.startsWith("/onboarding/account") || path === "/security" },
     { label: "Client Onboarding Fee", to: "/onboarding/fee", done: Boolean(user.feePaidAt), match: (path: string) => path.startsWith("/onboarding/fee") },
-    { label: "KYC", to: user.feePaidAt ? "/kyc" : "/onboarding/fee", done: user.status === "active" || user.status === "kyc_approved", match: (path: string) => path.startsWith("/kyc") },
+    { label: "KYC", to: user.feePaidAt ? (user.status === "kyc_pending_review" ? "/kyc/status" : "/kyc") : "/onboarding/fee", done: user.status === "active", match: (path: string) => path.startsWith("/kyc") },
   ];
   return (
     <div className="min-h-screen bg-cream">
@@ -188,14 +188,15 @@ export function ClientLayout() {
   if (!user) return <Navigate to="/login" replace />;
   if (user.status === "suspended") return <Navigate to="/suspended" replace />;
   if (user.status === "otp_pending") return <Navigate to="/onboarding/fee" replace />;
-  if (user.status === "active" || user.status === "kyc_approved") return <AppShell />;
+  // Full app only after admin KYC approval activates the account.
+  if (user.status === "active") return <AppShell />;
   return <OnboardingShell />;
 }
 
 export function ActiveOnly() {
   const { user } = useApp();
   if (!user) return <Navigate to="/login" replace />;
-  if (user.status !== "active" && user.status !== "kyc_approved") return <Navigate to={homePath(user)} replace />;
+  if (user.status !== "active") return <Navigate to={homePath(user)} replace />;
   return <Outlet />;
 }
 

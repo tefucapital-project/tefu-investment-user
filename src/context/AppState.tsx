@@ -25,9 +25,9 @@ import {
   updateProfile,
   verifyOtp,
 } from "../lib/engine";
-import { api as liveApi, ApiError, clearApiTokens, newIdempotencyKey, saveApiTokens, type Checkout, type Tokens } from "../lib/api";
+import { api as liveApi, ApiError, clearApiTokens, hasApiSession, newIdempotencyKey, saveApiTokens, type Checkout, type Tokens } from "../lib/api";
 import { deviceLabel, digest, oneTimeCode, uid } from "../lib/format";
-import { mapAccountStatus, upsertRemoteUser } from "../lib/remoteUser";
+import { applyRemoteKyc, mapAccountStatus, upsertRemoteUser, type RemoteKycView } from "../lib/remoteUser";
 import { allLive } from "../lib/selectors";
 import { freshState, loadState, persist, syncSession } from "../lib/storage";
 import type { ActionResult, AppState, PersonalInfo, RegisterForm, User } from "../lib/types";
@@ -58,14 +58,16 @@ interface AppApi {
   setTwoFactor: (enabled: boolean, password: string) => Promise<ActionResult>;
   payOnboardingFee: (method: string, outcome: "successful" | "failed" | "pending", reference: string) => Promise<ActionResult<FeeCheckout>>;
   syncOnboardingFee: () => Promise<ActionResult<{ paid: boolean }>>;
+  reconcileOnboardingFee: (reference?: string) => Promise<ActionResult<{ paid: boolean; reference?: string | null; status?: string }>>;
   verifyPayment: (reference: string) => Promise<ActionResult<{ reference: string; status: string; purpose?: string }>>;
-  savePersonal: (info: PersonalInfo) => ActionResult;
+  syncKyc: () => Promise<ActionResult>;
+  savePersonal: (info: PersonalInfo) => Promise<ActionResult>;
   submitNin: (nin: string) => Promise<ActionResult>;
   submitBvn: (bvn: string) => Promise<ActionResult>;
-  saveBank: (input: { bankName: string; accountNumber: string; accountName: string; id?: string }) => ActionResult;
-  saveDocument: (input: { docType: string; name: string; dataUrl: string | null }) => ActionResult;
-  saveSelfie: (input: { name: string; dataUrl: string | null }) => ActionResult;
-  submitKyc: () => ActionResult;
+  saveBank: (input: { bankName: string; accountNumber: string; accountName: string; id?: string }) => Promise<ActionResult>;
+  saveDocument: (input: { docType: string; name: string; dataUrl: string | null }) => Promise<ActionResult>;
+  saveSelfie: (input: { name: string; dataUrl: string | null }) => Promise<ActionResult>;
+  submitKyc: () => Promise<ActionResult>;
   createDeposit: (amount: number, method: string, outcome: "successful" | "failed") => Promise<ActionResult<DepositCheckout>>;
   requestWithdrawal: (bankId: string, amount: number, pin: string) => Promise<ActionResult<{ reference: string }>>;
   createInvestment: (input: { opportunityId: string; amount: number; accepted: boolean; pin: string }) => Promise<ActionResult<{ holdingId: string; reference: string }>>;
@@ -189,14 +191,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ email: email.trim(), password }),
           });
           saveApiTokens(result.data.accessToken, result.data.refreshToken);
-          const [profile, account] = await Promise.all([
+          const [profile, account, kyc] = await Promise.all([
             liveApi<{ id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string }>("/profile"),
             liveApi<{ onboardingFeePaid: boolean; status: string; canInvest: boolean }>("/account"),
+            liveApi<RemoteKycView>("/kyc").catch(() => null),
           ]);
           return apply((draft) => {
-            upsertRemoteUser(draft, profile.data, {
+            const user = upsertRemoteUser(draft, profile.data, {
               feePaidAt: account.data.onboardingFeePaid ? Date.now() : null,
             });
+            user.status = mapAccountStatus(account.data.status);
+            if (kyc?.data) applyRemoteKyc(user, kyc.data, account.data.status);
             return { ok: true as const, data: { twoFactor: false, sessionId: profile.data.id } };
           });
         } catch (error) {
@@ -311,27 +316,85 @@ export function AppProvider({ children }: { children: ReactNode }) {
           };
         }
       },
+      async reconcileOnboardingFee(reference) {
+        try {
+          const result = await liveApi<{ paid: boolean; reference?: string | null; status?: string; reconciled?: boolean }>(
+            "/onboarding-fee/reconcile",
+            {
+              method: "POST",
+              body: JSON.stringify(reference ? { reference } : {}),
+            },
+          );
+          const account = await liveApi<{ onboardingFeePaid: boolean; status: string }>("/account");
+          const paid = Boolean(result.data.paid || account.data.onboardingFeePaid);
+          apply((draft) => {
+            const user = draft.users.find((item) => item.id === draft.currentUserId);
+            if (!user) return { ok: false as const, error: "Sign in to continue." };
+            user.feePaidAt = paid ? user.feePaidAt ?? Date.now() : null;
+            user.status = mapAccountStatus(account.data.status);
+            if (paid && user.status === "kyc_locked") user.status = "kyc_in_progress";
+            const ref = result.data.reference;
+            if (ref && paid) {
+              const fee = draft.fees.find((item) => item.reference === ref && item.userId === user.id);
+              if (fee) {
+                fee.status = "successful";
+                fee.paidAt = Date.now();
+              } else {
+                draft.fees.unshift({
+                  id: uid(),
+                  userId: user.id,
+                  feeType: "client_onboarding_fee",
+                  name: "Client Onboarding Fee",
+                  amount: 5000,
+                  status: "successful",
+                  paymentMethod: "Paystack",
+                  reference: ref,
+                  purpose: "Client onboarding before KYC",
+                  createdAt: Date.now(),
+                  paidAt: Date.now(),
+                });
+              }
+            }
+            return { ok: true as const };
+          });
+          return {
+            ok: true as const,
+            data: { paid, reference: result.data.reference, status: result.data.status },
+          };
+        } catch (error) {
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not confirm Paystack payment with Tefu.",
+          };
+        }
+      },
       async verifyPayment(reference) {
         try {
           const result = await liveApi<{ reference: string; status: string; purpose?: string; amount?: number }>("/payments/verify", {
             method: "POST",
             body: JSON.stringify({ reference }),
           });
+          const account = await liveApi<{ onboardingFeePaid: boolean; status: string }>("/account").catch(() => null);
           apply((draft) => {
             const user = draft.users.find((item) => item.id === draft.currentUserId);
             if (!user) return { ok: false as const, error: "Sign in to continue." };
             const status = String(result.data.status).toLowerCase();
-            const paid = status === "successful" || status === "success";
+            const paid =
+              status === "successful" ||
+              status === "success" ||
+              Boolean(account?.data.onboardingFeePaid);
             const fee = draft.fees.find((item) => item.reference === reference && item.userId === user.id);
             if (fee) {
               fee.status = paid ? "successful" : status === "failed" ? "failed" : "pending";
               fee.paidAt = paid ? Date.now() : null;
               fee.paymentMethod = "Paystack";
             }
-            if (paid && result.data.purpose === "ONBOARDING_FEE") {
+            if (paid && (result.data.purpose === "ONBOARDING_FEE" || account?.data.onboardingFeePaid)) {
               user.feePaidAt = Date.now();
               if (user.status === "kyc_locked") user.status = "kyc_in_progress";
             }
+            if (account?.data.status) user.status = mapAccountStatus(account.data.status);
             if (paid && result.data.purpose === "DEPOSIT" && result.data.amount != null) {
               user.wallet.available += result.data.amount;
               user.wallet.balance = user.wallet.available + user.wallet.locked;
@@ -343,29 +406,206 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return { ok: false, error: error instanceof Error ? error.message : "Payment verification failed." };
         }
       },
-      savePersonal(info) {
+      async syncKyc() {
+        if (!hasApiSession()) return { ok: true as const };
+        try {
+          const [account, kyc] = await Promise.all([
+            liveApi<{ onboardingFeePaid: boolean; status: string }>("/account"),
+            liveApi<RemoteKycView>("/kyc"),
+          ]);
+          apply((draft) => {
+            const user = draft.users.find((item) => item.id === draft.currentUserId);
+            if (!user) return { ok: false as const, error: "Sign in to continue." };
+            user.feePaidAt = account.data.onboardingFeePaid ? user.feePaidAt ?? Date.now() : null;
+            applyRemoteKyc(user, kyc.data, account.data.status);
+            return { ok: true as const };
+          });
+          return { ok: true as const };
+        } catch (error) {
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          return { ok: false, error: error instanceof Error ? error.message : "Could not refresh KYC status." };
+        }
+      },
+      async savePersonal(info) {
+        if (hasApiSession()) {
+          try {
+            const result = await liveApi<RemoteKycView>("/kyc", {
+              method: "PATCH",
+              body: JSON.stringify({
+                dateOfBirth: info.dob,
+                gender: info.gender,
+                nationality: info.nationality,
+                address: info.address,
+                state: info.state,
+                lga: info.lga,
+              }),
+            });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              const local = savePersonal(draft, info);
+              if (!local.ok) return local;
+              applyRemoteKyc(user, result.data);
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "Could not save personal information." };
+          }
+        }
         return apply((draft) => savePersonal(draft, info));
       },
       async submitNin(nin) {
+        if (hasApiSession()) {
+          try {
+            const result = await liveApi<RemoteKycView>("/kyc/nin/verify", {
+              method: "POST",
+              body: JSON.stringify({ nin, consent: true }),
+            });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              applyRemoteKyc(user, result.data);
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "NIN verification failed." };
+          }
+        }
         const salt = uid();
         const hash = await digest(salt, nin);
         return apply((draft) => submitNin(draft, nin, hash));
       },
       async submitBvn(bvn) {
+        if (hasApiSession()) {
+          try {
+            const result = await liveApi<RemoteKycView>("/kyc/bvn/verify", {
+              method: "POST",
+              body: JSON.stringify({ bvn, consent: true }),
+            });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              applyRemoteKyc(user, result.data);
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "BVN verification failed." };
+          }
+        }
         const salt = uid();
         const hash = await digest(salt, bvn);
         return apply((draft) => submitBvn(draft, bvn, hash));
       },
-      saveBank(input) {
+      async saveBank(input) {
+        if (hasApiSession()) {
+          try {
+            const result = await liveApi<RemoteKycView>("/kyc/bank-account/verify", {
+              method: "POST",
+              body: JSON.stringify({
+                bankName: input.bankName,
+                accountNumber: input.accountNumber,
+                accountName: input.accountName,
+              }),
+            });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              applyRemoteKyc(user, result.data);
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "Bank verification failed." };
+          }
+        }
         return apply((draft) => saveBank(draft, input));
       },
-      saveDocument(input) {
+      async saveDocument(input) {
+        if (hasApiSession()) {
+          if (!input.dataUrl) return { ok: false, error: "Choose a document file to upload." };
+          try {
+            const contentBase64 = input.dataUrl.includes(",") ? input.dataUrl.split(",")[1] : input.dataUrl;
+            const result = await liveApi<RemoteKycView>("/kyc/documents", {
+              method: "POST",
+              body: JSON.stringify({
+                kind: "IDENTITY",
+                fileName: input.name || `${input.docType || "id"}.bin`,
+                contentBase64,
+              }),
+            });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              const local = saveDocument(draft, input);
+              if (!local.ok) return local;
+              applyRemoteKyc(user, result.data);
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "Document upload failed." };
+          }
+        }
         return apply((draft) => saveDocument(draft, input));
       },
-      saveSelfie(input) {
+      async saveSelfie(input) {
+        if (hasApiSession()) {
+          if (!input.dataUrl) return { ok: false, error: "Choose an identity photo to upload." };
+          try {
+            const contentBase64 = input.dataUrl.includes(",") ? input.dataUrl.split(",")[1] : input.dataUrl;
+            const result = await liveApi<RemoteKycView>("/kyc/documents", {
+              method: "POST",
+              body: JSON.stringify({
+                kind: "SELFIE",
+                fileName: input.name || "selfie.jpg",
+                contentBase64,
+              }),
+            });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              const local = saveSelfie(draft, input);
+              if (!local.ok) return local;
+              applyRemoteKyc(user, result.data);
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "Identity photo upload failed." };
+          }
+        }
         return apply((draft) => saveSelfie(draft, input));
       },
-      submitKyc() {
+      async submitKyc() {
+        if (hasApiSession()) {
+          try {
+            const result = await liveApi<RemoteKycView>("/kyc/submit", { method: "POST", body: JSON.stringify({}) });
+            apply((draft) => {
+              const user = draft.users.find((item) => item.id === draft.currentUserId);
+              if (!user) return { ok: false as const, error: "Sign in to continue." };
+              applyRemoteKyc(user, result.data, "KYC_PENDING_REVIEW");
+              user.kyc.events.push({
+                status: "Pending Review",
+                at: Date.now(),
+                note: "KYC was submitted. An admin must approve it before you can use the investment account.",
+              });
+              return { ok: true as const };
+            });
+            return { ok: true as const };
+          } catch (error) {
+            if (error instanceof ApiError) return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : "Could not submit KYC for review." };
+          }
+        }
         return apply(submitKyc);
       },
       async createDeposit(amount, _method, _outcome) {

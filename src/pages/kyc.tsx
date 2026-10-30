@@ -1,11 +1,15 @@
-import { useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Banner, Button, PageTitle, Pill, SelectField, TextField } from "../components/ui";
 import { useClient } from "../context/AppState";
 import { BANKS, GENDERS, ID_TYPES, NIGERIA_STATES } from "../lib/catalog";
 import { dateTime, maskId } from "../lib/format";
 import { KYC_LOCK_MESSAGE, KYC_STATUS_LABEL, VERIFY_LABEL } from "../lib/labels";
 import type { PersonalInfo, User } from "../lib/types";
+
+function underAdminReview(user: User) {
+  return user.status === "kyc_pending_review" || user.kyc.status === "pending_review";
+}
 
 function steps(user: User) {
   const bank = user.banks.find((item) => item.id === user.kyc.bankAccountId);
@@ -21,8 +25,13 @@ function steps(user: User) {
 }
 
 export function KycFrame({ children }: { children: ReactNode }) {
-  const { user } = useClient();
+  const { user, syncKyc } = useClient();
+  useEffect(() => {
+    void syncKyc();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh once when KYC shell mounts
+  }, [user.id]);
   if (!user.feePaidAt) return <Banner>{KYC_LOCK_MESSAGE}</Banner>;
+  const reviewing = underAdminReview(user);
   return (
     <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
       <aside className="rounded-[2rem] border border-line bg-paper p-4">
@@ -48,7 +57,10 @@ export function KycFrame({ children }: { children: ReactNode }) {
           </li>
           {steps(user).map((step) => (
             <li key={step.to}>
-              <Link to={step.to} className="block rounded-2xl px-3 py-2 hover:bg-cream">
+              <Link
+                to={reviewing ? "/kyc/status" : step.to}
+                className="block rounded-2xl px-3 py-2 hover:bg-cream"
+              >
                 <span className="block text-sm">{step.label}</span>
                 <span className="text-xs text-muted">{step.detail}</span>
               </Link>
@@ -57,19 +69,27 @@ export function KycFrame({ children }: { children: ReactNode }) {
           <li><Link to="/kyc/status" className="block rounded-2xl px-3 py-2 text-sm hover:bg-cream">KYC Status</Link></li>
         </ul>
       </aside>
-      <div>{children}</div>
+      <div>
+        {reviewing ? (
+          <Banner tone="warn">
+            Your KYC is with Tefu for admin review. You cannot change it or use the investment account until an admin approves it.
+          </Banner>
+        ) : null}
+        {children}
+      </div>
     </div>
   );
 }
 
 export function KycHome() {
   const { user } = useClient();
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   return (
     <KycFrame>
       <PageTitle
         eyebrow="KYC"
         title="One verification, with NIN and BVN inside it"
-        lede="NIN and BVN are not separate onboarding stages. They are required parts of this KYC file."
+        lede="NIN and BVN are not separate onboarding stages. They are required parts of this KYC file. After you submit, an admin must approve before you can invest."
       />
       <p className="mb-4 text-sm">KYC Completion: {user.kyc.completion}%</p>
       <div className="grid gap-3">
@@ -88,6 +108,8 @@ export function KycPersonal() {
   const { user, savePersonal } = useClient();
   const [form, setForm] = useState<PersonalInfo>(user.kyc.personal);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   const locked = user.kyc.nin.status === "verified" || user.kyc.bvn.status === "verified";
   const set = (key: keyof PersonalInfo) => (value: string) => setForm((current) => ({ ...current, [key]: value }));
   return (
@@ -97,8 +119,11 @@ export function KycPersonal() {
         className="space-y-4 rounded-[2rem] border border-line bg-paper p-6"
         onSubmit={(event) => {
           event.preventDefault();
-          const result = savePersonal(form);
-          setError(result.ok ? "" : result.error);
+          setBusy(true);
+          void savePersonal(form).then((result) => {
+            setBusy(false);
+            setError(result.ok ? "" : result.error);
+          });
         }}
       >
         {error ? <Banner tone="danger">{error}</Banner> : null}
@@ -123,7 +148,7 @@ export function KycPersonal() {
           <TextField label="LGA" value={form.lga} onChange={set("lga")} />
         </div>
         <TextField label="Country" value="Nigeria" onChange={() => undefined} disabled hint="This version is for clients in Nigeria." />
-        <Button type="submit">Save personal information</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save personal information"}</Button>
       </form>
     </KycFrame>
   );
@@ -135,6 +160,7 @@ function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   const locked = record.status === "verified";
   return (
     <KycFrame>
@@ -188,6 +214,8 @@ export function KycBank() {
   const [accountNumber, setAccountNumber] = useState(existing?.accountNumber ?? "");
   const [accountName, setAccountName] = useState(existing?.accountName ?? "");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   return (
     <KycFrame>
       <PageTitle title="Bank account" lede="The verified account is the one that can receive withdrawals. The account name should include your first and last name." />
@@ -195,8 +223,11 @@ export function KycBank() {
         className="space-y-4 rounded-[2rem] border border-line bg-paper p-6"
         onSubmit={(event) => {
           event.preventDefault();
-          const result = saveBank({ bankName, accountNumber, accountName, id: existing?.id });
-          setError(result.ok ? "" : result.error);
+          setBusy(true);
+          void saveBank({ bankName, accountNumber, accountName, id: existing?.id }).then((result) => {
+            setBusy(false);
+            setError(result.ok ? "" : result.error);
+          });
         }}
       >
         {existing ? <Pill status={existing.status}>{VERIFY_LABEL[existing.status]}</Pill> : null}
@@ -205,7 +236,7 @@ export function KycBank() {
         <SelectField label="Bank name" value={bankName} onChange={setBankName} options={BANKS} />
         <TextField label="Account number" value={accountNumber} onChange={setAccountNumber} />
         <TextField label="Account name" value={accountName} onChange={setAccountName} />
-        <Button type="submit">Verify bank account</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify bank account"}</Button>
       </form>
     </KycFrame>
   );
@@ -227,6 +258,7 @@ export function KycDocs() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const stored = state.documents.find((item) => item.id === user.kyc.document.id);
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   return (
     <KycFrame>
       <PageTitle title="Identification document" lede="Upload a government-issued ID, passport, driver's licence, national ID, or another approved identification." />
@@ -246,7 +278,7 @@ export function KycDocs() {
               const file = event.target.files?.[0];
               if (!file) return;
               const dataUrl = await readFile(file);
-              const result = saveDocument({ docType, name: file.name, dataUrl });
+              const result = await saveDocument({ docType, name: file.name, dataUrl });
               if (!result.ok) setError(result.error);
               else {
                 setError("");
@@ -266,6 +298,7 @@ export function KycSelfie() {
   const { user, saveSelfie, state } = useClient();
   const [error, setError] = useState("");
   const stored = state.documents.find((item) => item.id === user.kyc.selfie.id);
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
   return (
     <KycFrame>
       <PageTitle title="Identity photo" lede="A clear photo of your face is included in the KYC file." />
@@ -279,7 +312,7 @@ export function KycSelfie() {
             const file = event.target.files?.[0];
             if (!file) return;
             const dataUrl = await readFile(file);
-            const result = saveSelfie({ name: file.name, dataUrl });
+            const result = await saveSelfie({ name: file.name, dataUrl });
             setError(result.ok ? "" : result.error);
           }}
         />
@@ -294,10 +327,22 @@ export function KycReview() {
   const { user, submitKyc } = useClient();
   const navigate = useNavigate();
   const [error, setError] = useState("");
-  const ready = user.kyc.completion === 100 && user.kyc.nin.status === "verified" && user.kyc.bvn.status === "verified";
+  const [busy, setBusy] = useState(false);
+  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
+  const bank = user.banks.find((item) => item.id === user.kyc.bankAccountId);
+  const ready =
+    user.kyc.personalComplete &&
+    user.kyc.nin.status === "verified" &&
+    user.kyc.bvn.status === "verified" &&
+    bank?.status === "verified" &&
+    user.kyc.document.status !== "not_started" &&
+    user.kyc.selfie.status !== "not_started";
   return (
     <KycFrame>
-      <PageTitle title="Final review" lede="KYC cannot be approved while a mandatory item is incomplete." />
+      <PageTitle
+        title="Final review"
+        lede="Submit your file for admin review. You cannot deposit or invest until an admin approves your KYC."
+      />
       <p className="mb-4 font-serif text-2xl text-forest">KYC Completion: {user.kyc.completion}%</p>
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <ul className="space-y-2">
@@ -309,28 +354,54 @@ export function KycReview() {
       </ul>
       <Button
         className="mt-5"
-        disabled={!ready || user.status === "active"}
+        disabled={!ready || busy || user.status === "active"}
         onClick={() => {
-          const result = submitKyc();
-          if (!result.ok) setError(result.error);
-          else navigate("/kyc/status");
+          setBusy(true);
+          void submitKyc().then((result) => {
+            setBusy(false);
+            if (!result.ok) setError(result.error);
+            else navigate("/kyc/status");
+          });
         }}
       >
-        {user.status === "active" ? "KYC already approved" : "Submit KYC"}
+        {user.status === "active" ? "KYC already approved" : busy ? "Submitting…" : "Submit KYC for admin review"}
       </Button>
     </KycFrame>
   );
 }
 
 export function KycStatus() {
-  const { user } = useClient();
+  const { user, syncKyc } = useClient();
+  useEffect(() => {
+    void syncKyc();
+    const timer = window.setInterval(() => {
+      void syncKyc();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id]);
+  const reviewing = underAdminReview(user);
   return (
     <KycFrame>
-      <PageTitle title="KYC status" lede={user.kyc.status === "not_started" ? "KYC has not begun because the onboarding fee has not been paid." : KYC_STATUS_LABEL[user.kyc.status]} />
+      <PageTitle
+        title="KYC status"
+        lede={
+          user.kyc.status === "not_started"
+            ? "KYC has not begun because the onboarding fee has not been paid."
+            : reviewing
+              ? "Waiting for admin approval. You cannot use the investment account until this is approved."
+              : KYC_STATUS_LABEL[user.kyc.status]
+        }
+      />
       <div className="rounded-[2rem] border border-line bg-paper p-6">
         <Pill status={user.kyc.status}>{KYC_STATUS_LABEL[user.kyc.status]}</Pill>
         <p className="mt-4 font-serif text-3xl text-forest">KYC Completion: {user.kyc.completion}%</p>
-        {user.kyc.status === "approved" ? <p className="mt-2 text-sm text-ok">KYC: Verified</p> : null}
+        {reviewing ? (
+          <Banner tone="warn">
+            Your KYC was submitted and is locked for admin review. Deposit, withdraw, and invest stay unavailable until approval.
+          </Banner>
+        ) : null}
+        {user.kyc.status === "approved" || user.status === "active" ? <p className="mt-2 text-sm text-ok">KYC: Verified — your account is active.</p> : null}
         {user.kyc.rejectionReason ? <Banner tone="danger">{user.kyc.rejectionReason}</Banner> : null}
         <ul className="mt-4 space-y-3 text-sm">
           {user.kyc.events.map((event) => (
@@ -343,7 +414,16 @@ export function KycStatus() {
           {user.kyc.submittedAt ? <li>Submitted {dateTime(user.kyc.submittedAt)}</li> : null}
           {user.kyc.approvedAt ? <li>Approved {dateTime(user.kyc.approvedAt)}</li> : null}
         </ul>
-        {user.status === "active" ? <Link to="/dashboard" className="mt-5 inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">Go to dashboard</Link> : null}
+        {user.status === "active" ? (
+          <Link to="/dashboard" className="mt-5 inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2">
+            Go to dashboard
+          </Link>
+        ) : null}
+        {(user.status === "kyc_rejected" || user.kyc.status === "requires_update" || user.kyc.status === "rejected") && !reviewing ? (
+          <Link to="/kyc" className="mt-5 inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">
+            Update KYC and resubmit
+          </Link>
+        ) : null}
       </div>
     </KycFrame>
   );

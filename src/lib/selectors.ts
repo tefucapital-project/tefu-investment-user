@@ -160,7 +160,9 @@ export function homePath(user: User | null) {
   if (user.status === "suspended") return "/suspended";
   if (user.status === "otp_pending") return "/onboarding/fee";
   if (!user.feePaidAt || user.status === "kyc_locked") return "/onboarding/fee";
-  if (user.status === "active" || user.status === "kyc_approved") return "/dashboard";
+  if (user.status === "active") return "/dashboard";
+  if (user.status === "kyc_pending_review" || user.kyc.status === "pending_review") return "/kyc/status";
+  if (user.status === "kyc_rejected" || user.kyc.status === "rejected") return "/kyc/status";
   return "/kyc";
 }
 
