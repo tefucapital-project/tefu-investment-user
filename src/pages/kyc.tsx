@@ -223,23 +223,60 @@ export function KycBvn() {
 }
 
 export function KycBank() {
-  const { user, saveBank } = useClient();
+  const { user, saveBank, resolveBank } = useClient();
   const existing = user.banks.find((item) => item.id === user.kyc.bankAccountId);
   const [bankName, setBankName] = useState(existing?.bankName ?? "");
   const [accountNumber, setAccountNumber] = useState(existing?.accountNumber ?? "");
   const [accountName, setAccountName] = useState(existing?.accountName ?? "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
+  const [lookingUp, setLookingUp] = useState(false);
+  const reviewing = underAdminReview(user);
+  const digits = accountNumber.replace(/\D/g, "");
+  const canVerify = Boolean(bankName && accountName && /^\d{10}$/.test(digits));
+
+  useEffect(() => {
+    if (reviewing) return;
+    if (!bankName || !/^\d{10}$/.test(digits)) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setLookingUp(true);
+      setError("");
+      void resolveBank({ bankName, accountNumber: digits }).then((result) => {
+        if (cancelled) return;
+        setLookingUp(false);
+        if (!result.ok || !result.data) {
+          setAccountName("");
+          setError(result.ok ? "Could not resolve account name." : result.error);
+          return;
+        }
+        setAccountName(result.data.accountName);
+      });
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [bankName, digits, resolveBank, reviewing]);
+
+  if (reviewing) return <Navigate to="/kyc/status" replace />;
+
   return (
     <KycFrame>
-      <PageTitle title="Bank account" lede="The verified account is the one that can receive withdrawals. The account name should include your first and last name." />
+      <PageTitle
+        title="Bank account"
+        lede="Select your bank and type the 10-digit account number. The account name is pulled automatically for verification."
+      />
       <form
         className="space-y-4 rounded-[2rem] border border-line bg-paper p-6"
         onSubmit={(event) => {
           event.preventDefault();
+          if (!canVerify) {
+            setError("Select a bank and enter a valid account number so the account name can load.");
+            return;
+          }
           setBusy(true);
-          void saveBank({ bankName, accountNumber, accountName, id: existing?.id }).then((result) => {
+          void saveBank({ bankName, accountNumber: digits, accountName, id: existing?.id }).then((result) => {
             setBusy(false);
             setError(result.ok ? "" : result.error);
           });
@@ -248,10 +285,38 @@ export function KycBank() {
         {existing ? <Pill status={existing.status}>{VERIFY_LABEL[existing.status]}</Pill> : null}
         {existing?.reason ? <p className="text-sm">{existing.reason}</p> : null}
         {error ? <Banner tone="danger">{error}</Banner> : null}
-        <SelectField label="Bank name" value={bankName} onChange={setBankName} options={BANKS} />
-        <TextField label="Account number" value={accountNumber} onChange={setAccountNumber} />
-        <TextField label="Account name" value={accountName} onChange={setAccountName} />
-        <Button type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify bank account"}</Button>
+        {lookingUp ? <Banner>Looking up account name…</Banner> : null}
+        {accountName && !lookingUp ? <Banner tone="ok">Account name found: {accountName}</Banner> : null}
+        <SelectField
+          label="Bank name"
+          value={bankName}
+          onChange={(next) => {
+            setBankName(next);
+            setAccountName("");
+          }}
+          options={BANKS}
+        />
+        <TextField
+          label="Account number"
+          value={accountNumber}
+          onChange={(next) => {
+            const value = next.replace(/\D/g, "").slice(0, 10);
+            setAccountNumber(value);
+            if (value.length < 10) setAccountName("");
+          }}
+          placeholder="10 digits"
+          autoComplete="off"
+        />
+        <TextField
+          label="Account name"
+          value={lookingUp ? "Looking up…" : accountName}
+          onChange={() => undefined}
+          disabled
+          hint="Filled automatically after you enter a valid account number."
+        />
+        <Button type="submit" disabled={busy || lookingUp || !canVerify}>
+          {busy ? "Verifying…" : "Confirm bank account"}
+        </Button>
       </form>
     </KycFrame>
   );

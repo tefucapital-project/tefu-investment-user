@@ -64,6 +64,7 @@ interface AppApi {
   savePersonal: (info: PersonalInfo) => Promise<ActionResult>;
   submitNin: (nin: string) => Promise<ActionResult>;
   submitBvn: (bvn: string) => Promise<ActionResult>;
+  resolveBank: (input: { bankName: string; accountNumber: string }) => Promise<ActionResult<{ accountName: string; accountNumber: string }>>;
   saveBank: (input: { bankName: string; accountNumber: string; accountName: string; id?: string }) => Promise<ActionResult>;
   saveDocument: (input: { docType: string; name: string; dataUrl: string | null }) => Promise<ActionResult>;
   saveSelfie: (input: { name: string; dataUrl: string | null }) => Promise<ActionResult>;
@@ -510,6 +511,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const hash = await digest(salt, typed);
         return apply((draft) => submitBvn(draft, typed, hash));
       },
+      async resolveBank(input) {
+        const accountNumber = input.accountNumber.replace(/\D/g, "");
+        if (!input.bankName.trim()) return { ok: false as const, error: "Select a bank first." };
+        if (!/^\d{10}$/.test(accountNumber)) {
+          return { ok: false as const, error: "Enter the full 10-digit account number." };
+        }
+        if (!hasApiSession()) {
+          return {
+            ok: true as const,
+            data: {
+              accountNumber,
+              accountName: `${input.bankName} Account ${accountNumber.slice(-4)}`,
+            },
+          };
+        }
+        try {
+          const result = await liveApi<{ accountName: string; accountNumber: string }>("/kyc/bank-account/resolve", {
+            method: "POST",
+            body: JSON.stringify({ bankName: input.bankName, accountNumber }),
+          });
+          return {
+            ok: true as const,
+            data: {
+              accountName: result.data.accountName,
+              accountNumber: result.data.accountNumber || accountNumber,
+            },
+          };
+        } catch (error) {
+          if (error instanceof ApiError) return { ok: false, error: error.message };
+          return { ok: false, error: error instanceof Error ? error.message : "Could not resolve the account name." };
+        }
+      },
       async saveBank(input) {
         if (hasApiSession()) {
           try {
@@ -517,8 +550,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               method: "POST",
               body: JSON.stringify({
                 bankName: input.bankName,
-                accountNumber: input.accountNumber,
-                accountName: input.accountName,
+                accountNumber: input.accountNumber.replace(/\D/g, ""),
+                accountName: input.accountName || undefined,
               }),
             });
             apply((draft) => {
