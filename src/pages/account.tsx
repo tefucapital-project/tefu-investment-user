@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Banner, Button, PageTitle, Pill, SelectField, TextArea, TextField } from "../components/ui";
 import { useClient } from "../context/AppState";
@@ -131,12 +131,13 @@ export function BanksPage() {
         className="mt-6 max-w-xl space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
-          const result = saveBank({ bankName, accountNumber, accountName });
-          setError(result.ok ? "" : result.error);
-          if (result.ok) {
-            setAccountNumber("");
-            setAccountName("");
-          }
+          void saveBank({ bankName, accountNumber, accountName }).then((result) => {
+            setError(result.ok ? "" : result.error);
+            if (result.ok) {
+              setAccountNumber("");
+              setAccountName("");
+            }
+          });
         }}
       >
         {error ? <Banner tone="danger">{error}</Banner> : null}
@@ -158,7 +159,11 @@ export function SecurityPage() {
   const [passwordFor2fa, setPasswordFor2fa] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const sessions = state.sessions.filter((item) => item.userId === user.id && item.expiresAt > Date.now());
+  const [now] = useState(() => Date.now());
+  const sessions = useMemo(
+    () => state.sessions.filter((item) => item.userId === user.id && item.expiresAt > now),
+    [state.sessions, user.id, now],
+  );
   const report = (result: { ok: boolean; error?: string }, success: string) => {
     if (!result.ok) {
       setMessage("");

@@ -101,19 +101,23 @@ export function applyRemoteKyc(user: User, remote: RemoteKycView, accountStatus?
 
   const bank = remote.banks?.[0];
   if (bank) {
-    const existing = user.banks.find((item) => item.id === bank.id) ?? {
-      id: bank.id,
-      bankName: bank.bankName,
-      accountNumber: `••••${bank.last4}`,
-      accountName: bank.accountName,
-      status: mapVerify(bank.status),
-      reason: "",
-      createdAt: Date.now(),
-    };
-    existing.bankName = bank.bankName;
-    existing.accountName = bank.accountName;
-    existing.status = mapVerify(bank.status);
-    if (!user.banks.some((item) => item.id === bank.id)) user.banks.unshift(existing);
+    const existing = user.banks.find((item) => item.id === bank.id);
+    if (existing) {
+      existing.bankName = bank.bankName;
+      existing.accountName = bank.accountName;
+      existing.status = mapVerify(bank.status);
+    } else {
+      user.banks.unshift({
+        id: bank.id,
+        bankName: bank.bankName,
+        accountNumber: `••••${bank.last4}`,
+        accountName: bank.accountName,
+        status: mapVerify(bank.status),
+        reason: "",
+        primary: true,
+        reference: bank.id,
+      });
+    }
     user.kyc.bankAccountId = bank.id;
   }
 

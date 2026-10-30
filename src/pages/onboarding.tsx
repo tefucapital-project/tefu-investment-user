@@ -88,7 +88,7 @@ export function FeeIntroPage() {
       setSyncing(false);
       return false;
     }
-    if (result.data.paid) {
+    if (result.data?.paid) {
       clearFeeRef();
       setSyncNote("Payment confirmed. Opening KYC…");
       setSyncing(false);
@@ -210,7 +210,7 @@ export function FeePayPage() {
     void (async () => {
       const result = await reconcileOnboardingFee(readStoredFeeRef() || undefined);
       if (cancelled) return;
-      if (result.ok && result.data.paid) {
+      if (result.ok && result.data?.paid) {
         clearFeeRef();
         navigate("/kyc", { replace: true });
         return;
@@ -419,7 +419,7 @@ export function FeeResultPage({ outcome }: { outcome: PaymentStatus }) {
                 setPhase("checking");
                 setError("");
                 void reconcileOnboardingFee(reference || undefined).then((result) => {
-                  if (result.ok && result.data.paid) {
+                  if (result.ok && result.data?.paid) {
                     clearFeeRef();
                     navigate("/kyc", { replace: true });
                     return;
