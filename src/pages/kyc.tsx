@@ -20,8 +20,98 @@ function steps(user: User) {
     { to: "/kyc/bank", label: "Bank Account", detail: bank ? VERIFY_LABEL[bank.status] : "Not Started", done: bank?.status === "verified" },
     { to: "/kyc/documents", label: "Identification Document", detail: user.kyc.document.status === "not_started" ? "Not Started" : "Submitted", done: user.kyc.document.status !== "not_started" },
     { to: "/kyc/selfie", label: "Selfie / Photo", detail: user.kyc.selfie.status === "not_started" ? "Not Started" : "Submitted", done: user.kyc.selfie.status !== "not_started" },
-    { to: "/kyc/review", label: "Final Review", detail: user.kyc.status === "approved" ? "Complete" : "Not Started", done: user.kyc.status === "approved" },
+    { to: "/kyc/review", label: "Final Review", detail: user.kyc.status === "approved" || user.kyc.status === "pending_review" ? "Complete" : "Not Started", done: user.kyc.status === "approved" || user.kyc.status === "pending_review" },
   ];
+}
+
+const KYC_NEXT: Record<string, string> = {
+  "/kyc/personal": "/kyc/nin",
+  "/kyc/nin": "/kyc/bvn",
+  "/kyc/bvn": "/kyc/bank",
+  "/kyc/bank": "/kyc/documents",
+  "/kyc/documents": "/kyc/selfie",
+  "/kyc/selfie": "/kyc/review",
+  "/kyc/review": "/kyc/status",
+};
+
+function KycContinue({
+  nextTo,
+  canContinue,
+  nextLabel = "Next",
+}: {
+  nextTo: string;
+  canContinue: boolean;
+  nextLabel?: string;
+}) {
+  if (!canContinue) return null;
+  return (
+    <Link to={nextTo} className="inline-flex rounded-full border border-line px-5 py-2.5 text-sm text-forest">
+      {nextLabel}
+    </Link>
+  );
+}
+
+async function readAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Compress phone camera photos so they fit the API body limit (null dataUrl used to fail live upload). */
+async function prepareUpload(file: File): Promise<{ dataUrl: string; name: string }> {
+  const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name);
+  if (!isImage) {
+    if (file.size > 1_800_000) {
+      throw new Error("PDF files must be 1.8MB or smaller.");
+    }
+    return { dataUrl: await readAsDataUrl(file), name: file.name };
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    let image: HTMLImageElement;
+    try {
+      image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("decode"));
+        img.src = objectUrl;
+      });
+    } catch {
+      // HEIC/unsupported formats: send original if it still fits.
+      if (file.size > 1_800_000) {
+        throw new Error("This phone photo format is too large. Take the photo again as JPEG, or pick a smaller image.");
+      }
+      return { dataUrl: await readAsDataUrl(file), name: file.name };
+    }
+    const maxSide = 1600;
+    const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not prepare the image for upload.");
+    ctx.drawImage(image, 0, 0, width, height);
+
+    let quality = 0.82;
+    let dataUrl = canvas.toDataURL("image/jpeg", quality);
+    while (dataUrl.length > 1_800_000 && quality > 0.4) {
+      quality -= 0.08;
+      dataUrl = canvas.toDataURL("image/jpeg", quality);
+    }
+    if (dataUrl.length > 2_400_000) {
+      throw new Error("This photo is still too large after compression. Try a clearer, smaller shot.");
+    }
+    const base = file.name.replace(/\.[^.]+$/, "") || "document";
+    return { dataUrl, name: `${base}.jpg` };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export function KycFrame({ children }: { children: ReactNode }) {
@@ -84,6 +174,8 @@ export function KycFrame({ children }: { children: ReactNode }) {
 export function KycHome() {
   const { user } = useClient();
   if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
+  const checklist = steps(user);
+  const nextStep = checklist.find((step) => !step.done) ?? checklist[checklist.length - 1];
   return (
     <KycFrame>
       <PageTitle
@@ -93,19 +185,28 @@ export function KycHome() {
       />
       <p className="mb-4 text-sm">KYC Completion: {user.kyc.completion}%</p>
       <div className="grid gap-3">
-        {steps(user).map((step) => (
+        {checklist.map((step) => (
           <Link key={step.to} to={step.to} className="flex items-center justify-between rounded-3xl border border-line bg-paper px-4 py-3">
             <span>{step.label}</span>
             <Pill status={step.done ? "verified" : "pending"}>{step.detail}</Pill>
           </Link>
         ))}
       </div>
+      {nextStep ? (
+        <Link
+          to={nextStep.to}
+          className="mt-5 inline-flex rounded-full bg-forest px-5 py-2.5 text-sm text-gold2"
+        >
+          {checklist.every((step) => step.done) ? "Go to final review" : `Continue: ${nextStep.label}`}
+        </Link>
+      ) : null}
     </KycFrame>
   );
 }
 
 export function KycPersonal() {
   const { user, savePersonal } = useClient();
+  const navigate = useNavigate();
   const [form, setForm] = useState<PersonalInfo>(user.kyc.personal);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -122,7 +223,12 @@ export function KycPersonal() {
           setBusy(true);
           void savePersonal(form).then((result) => {
             setBusy(false);
-            setError(result.ok ? "" : result.error);
+            if (!result.ok) {
+              setError(result.error);
+              return;
+            }
+            setError("");
+            navigate(KYC_NEXT["/kyc/personal"]);
           });
         }}
       >
@@ -148,7 +254,10 @@ export function KycPersonal() {
           <TextField label="LGA" value={form.lga} onChange={set("lga")} />
         </div>
         <TextField label="Country" value="Nigeria" onChange={() => undefined} disabled hint="This version is for clients in Nigeria." />
-        <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save personal information"}</Button>
+        <div className="flex flex-wrap gap-3">
+          <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save and continue"}</Button>
+          <KycContinue nextTo={KYC_NEXT["/kyc/personal"]} canContinue={user.kyc.personalComplete && !busy} />
+        </div>
       </form>
     </KycFrame>
   );
@@ -156,6 +265,7 @@ export function KycPersonal() {
 
 function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
   const { user, submitNin, submitBvn } = useClient();
+  const navigate = useNavigate();
   const record = kind === "NIN" ? user.kyc.nin : user.kyc.bvn;
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
@@ -164,6 +274,7 @@ function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
   const locked = record.status === "verified";
   const digits = value.replace(/\D/g, "");
   const canSubmit = user.kyc.personalComplete && /^\d{11}$/.test(digits);
+  const path = kind === "NIN" ? "/kyc/nin" : "/kyc/bvn";
   return (
     <KycFrame>
       <PageTitle
@@ -184,8 +295,12 @@ function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
           setError("");
           const result = kind === "NIN" ? await submitNin(typed) : await submitBvn(typed);
           setBusy(false);
-          setError(result.ok ? "" : result.error);
-          if (result.ok) setValue("");
+          if (!result.ok) {
+            setError(result.error);
+            return;
+          }
+          setValue("");
+          navigate(KYC_NEXT[path]);
         }}
       >
         <Pill status={record.status}>{VERIFY_LABEL[record.status]}</Pill>
@@ -204,11 +319,16 @@ function IdentityCheck({ kind }: { kind: "NIN" | "BVN" }) {
             <p className="text-xs leading-5 text-muted">
               You must type the {kind} yourself. Tefu matches it to your legal name and date of birth through Otobill — not your phone number.
             </p>
-            <Button type="submit" disabled={busy || !canSubmit}>
-              {busy ? "Verifying…" : `Submit ${kind}`}
-            </Button>
           </>
         )}
+        <div className="flex flex-wrap gap-3">
+          {!locked ? (
+            <Button type="submit" disabled={busy || !canSubmit}>
+              {busy ? "Verifying…" : `Save and continue`}
+            </Button>
+          ) : null}
+          <KycContinue nextTo={KYC_NEXT[path]} canContinue={locked} />
+        </div>
       </form>
     </KycFrame>
   );
@@ -224,6 +344,7 @@ export function KycBvn() {
 
 export function KycBank() {
   const { user, saveBank, resolveBank } = useClient();
+  const navigate = useNavigate();
   const existing = user.banks.find((item) => item.id === user.kyc.bankAccountId);
   const [bankName, setBankName] = useState(existing?.bankName ?? "");
   const [accountNumber, setAccountNumber] = useState(existing?.accountNumber ?? "");
@@ -234,6 +355,7 @@ export function KycBank() {
   const reviewing = underAdminReview(user);
   const digits = accountNumber.replace(/\D/g, "");
   const canVerify = Boolean(bankName && accountName && /^\d{10}$/.test(digits));
+  const bankDone = existing?.status === "verified";
 
   useEffect(() => {
     if (reviewing) return;
@@ -278,7 +400,12 @@ export function KycBank() {
           setBusy(true);
           void saveBank({ bankName, accountNumber: digits, accountName, id: existing?.id }).then((result) => {
             setBusy(false);
-            setError(result.ok ? "" : result.error);
+            if (!result.ok) {
+              setError(result.error);
+              return;
+            }
+            setError("");
+            navigate(KYC_NEXT["/kyc/bank"]);
           });
         }}
       >
@@ -314,61 +441,91 @@ export function KycBank() {
           disabled
           hint="Filled automatically after you enter a valid account number."
         />
-        <Button type="submit" disabled={busy || lookingUp || !canVerify}>
-          {busy ? "Verifying…" : "Confirm bank account"}
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button type="submit" disabled={busy || lookingUp || !canVerify}>
+            {busy ? "Verifying…" : "Save and continue"}
+          </Button>
+          <KycContinue nextTo={KYC_NEXT["/kyc/bank"]} canContinue={bankDone && !busy} />
+        </div>
       </form>
     </KycFrame>
   );
 }
 
-async function readFile(file: File) {
-  if (file.size > 700_000) return null;
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
 export function KycDocs() {
   const { user, saveDocument, state } = useClient();
-  const [docType, setDocType] = useState(user.kyc.document.docType);
+  const navigate = useNavigate();
+  const [docType, setDocType] = useState(user.kyc.document.docType || "National ID");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
   const stored = state.documents.find((item) => item.id === user.kyc.document.id);
+  const done = user.kyc.document.status !== "not_started";
   if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError("");
+    setNote("");
+    try {
+      const prepared = await prepareUpload(file);
+      const result = await saveDocument({ docType, name: prepared.name, dataUrl: prepared.dataUrl });
+      if (!result.ok) {
+        setError(result.error);
+        return false;
+      }
+      setPreview(prepared.dataUrl.startsWith("data:image") ? prepared.dataUrl : null);
+      setNote("Document received and saved.");
+      navigate(KYC_NEXT["/kyc/documents"]);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not prepare that file for upload.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <KycFrame>
       <PageTitle title="Identification document" lede="Upload a government-issued ID, passport, driver's licence, national ID, or another approved identification." />
       <form
         className="space-y-4 rounded-[2rem] border border-line bg-paper p-6"
-        onSubmit={(event) => event.preventDefault()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (done) navigate(KYC_NEXT["/kyc/documents"]);
+          else setError("Choose a document file to upload first.");
+        }}
       >
         {error ? <Banner tone="danger">{error}</Banner> : null}
-        {note ? <Banner tone="ok">{note}</Banner> : null}
+        {note || done ? <Banner tone="ok">{note || "Document already saved on this account."}</Banner> : null}
         <SelectField label="Document type" value={docType} onChange={setDocType} options={ID_TYPES} />
         <label className="block text-sm">
           <span className="mb-1.5 block font-medium">File</span>
           <input
             type="file"
             accept="image/*,.pdf"
+            disabled={busy}
             onChange={async (event) => {
               const file = event.target.files?.[0];
               if (!file) return;
-              const dataUrl = await readFile(file);
-              const result = await saveDocument({ docType, name: file.name, dataUrl });
-              if (!result.ok) setError(result.error);
-              else {
-                setError("");
-                setNote(dataUrl ? "Document received." : "Document received. The preview was skipped because the file is large.");
-              }
+              await upload(file);
+              event.target.value = "";
             }}
           />
+          <span className="mt-1 block text-xs text-muted">Phone photos are compressed automatically before upload.</span>
         </label>
-        {stored?.dataUrl ? <img src={stored.dataUrl} alt="Identification preview" className="max-h-48 rounded-2xl border border-line" /> : null}
+        {preview || stored?.dataUrl ? (
+          <img src={preview || stored?.dataUrl || ""} alt="Identification preview" className="max-h-48 rounded-2xl border border-line" />
+        ) : null}
         {user.kyc.document.name ? <p className="text-sm text-muted">Current file: {user.kyc.document.name}</p> : null}
+        <div className="flex flex-wrap gap-3">
+          <Button type="submit" disabled={busy || !done}>
+            {busy ? "Uploading…" : "Save and continue"}
+          </Button>
+          <KycContinue nextTo={KYC_NEXT["/kyc/documents"]} canContinue={done && !busy} />
+        </div>
       </form>
     </KycFrame>
   );
@@ -376,29 +533,78 @@ export function KycDocs() {
 
 export function KycSelfie() {
   const { user, saveSelfie, state } = useClient();
+  const navigate = useNavigate();
   const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
   const stored = state.documents.find((item) => item.id === user.kyc.selfie.id);
+  const done = user.kyc.selfie.status !== "not_started";
   if (underAdminReview(user)) return <Navigate to="/kyc/status" replace />;
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError("");
+    setNote("");
+    try {
+      const prepared = await prepareUpload(file);
+      const result = await saveSelfie({ name: prepared.name, dataUrl: prepared.dataUrl });
+      if (!result.ok) {
+        setError(result.error);
+        return false;
+      }
+      setPreview(prepared.dataUrl);
+      setNote("Identity photo received and saved.");
+      navigate(KYC_NEXT["/kyc/selfie"]);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not prepare that photo for upload.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <KycFrame>
       <PageTitle title="Identity photo" lede="A clear photo of your face is included in the KYC file." />
-      <div className="space-y-4 rounded-[2rem] border border-line bg-paper p-6">
+      <form
+        className="space-y-4 rounded-[2rem] border border-line bg-paper p-6"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (done) navigate(KYC_NEXT["/kyc/selfie"]);
+          else setError("Upload an identity photo first.");
+        }}
+      >
         {error ? <Banner tone="danger">{error}</Banner> : null}
-        <input
-          type="file"
-          accept="image/*"
-          capture="user"
-          onChange={async (event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-            const dataUrl = await readFile(file);
-            const result = await saveSelfie({ name: file.name, dataUrl });
-            setError(result.ok ? "" : result.error);
-          }}
-        />
-        {stored?.dataUrl ? <img src={stored.dataUrl} alt="Identity photo preview" className="max-h-56 rounded-2xl" /> : null}
+        {note || done ? <Banner tone="ok">{note || "Identity photo already saved on this account."}</Banner> : null}
+        <label className="block text-sm">
+          <span className="mb-1.5 block font-medium">Photo</span>
+          <input
+            type="file"
+            accept="image/*"
+            capture="user"
+            disabled={busy}
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              await upload(file);
+              event.target.value = "";
+            }}
+          />
+          <span className="mt-1 block text-xs text-muted">Phone camera photos are compressed automatically before upload.</span>
+        </label>
+        {preview || stored?.dataUrl ? (
+          <img src={preview || stored?.dataUrl || ""} alt="Identity photo preview" className="max-h-56 rounded-2xl" />
+        ) : null}
         {user.kyc.selfie.name ? <p className="text-sm text-muted">Current photo: {user.kyc.selfie.name}</p> : null}
-      </div>
+        <div className="flex flex-wrap gap-3">
+          <Button type="submit" disabled={busy || !done}>
+            {busy ? "Uploading…" : "Save and continue"}
+          </Button>
+          <KycContinue nextTo={KYC_NEXT["/kyc/selfie"]} canContinue={done && !busy} />
+        </div>
+      </form>
     </KycFrame>
   );
 }
@@ -446,6 +652,9 @@ export function KycReview() {
       >
         {user.status === "active" ? "KYC already approved" : busy ? "Submitting…" : "Submit KYC for admin review"}
       </Button>
+      <p className="mt-3 text-xs text-muted">
+        Earlier steps stay saved when you leave. Finish every step above, then submit here for admin review.
+      </p>
     </KycFrame>
   );
 }
