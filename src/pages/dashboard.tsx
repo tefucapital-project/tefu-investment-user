@@ -17,6 +17,11 @@ export function DashboardPage() {
         eyebrow={fullName(user)}
         title="Your investment account"
         lede="Balances, holdings, and distributions. Profit and rental appear here only after they are actually paid."
+        action={
+          user.profile.photo ? (
+            <img src={user.profile.photo} alt="" className="h-16 w-16 rounded-full border border-line object-cover" />
+          ) : undefined
+        }
       />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Wallet balance" value={naira(user.wallet.balance)} hint={`Available ${naira(user.wallet.available)}`} />

@@ -17,6 +17,22 @@ export function AccountOnboardingPage() {
         lede="You can return here any time during onboarding if you need to check your details before paying the fee or finishing KYC."
       />
       <div className="rounded-[2rem] border border-line bg-paper p-6 text-sm">
+        <div className="mb-5 flex items-center gap-4">
+          {user.profile.photo ? (
+            <img src={user.profile.photo} alt="" className="h-16 w-16 rounded-full border border-line object-cover" />
+          ) : (
+            <div className="grid h-16 w-16 place-items-center rounded-full border border-dashed border-line bg-cream text-[10px] text-muted">No photo</div>
+          )}
+          <div>
+            <p className="font-medium text-forest">Profile photo</p>
+            <p className="mt-1 text-muted">Taken from your KYC selfie.</p>
+            {user.feePaidAt ? (
+              <Link to="/kyc/selfie" className="mt-1 inline-flex text-canopy">
+                {user.profile.photo ? "Update selfie" : "Add selfie"}
+              </Link>
+            ) : null}
+          </div>
+        </div>
         <dl className="space-y-3">
           <Row label="Name" value={fullName(user)} />
           <Row label="Email" value={user.email} />

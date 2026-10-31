@@ -661,6 +661,7 @@ export function saveSelfie(state: AppState, input: { name: string; dataUrl: stri
     reference: reference("IMG"),
   });
   user.kyc.selfie = { status: "submitted", docType: "Selfie", name: input.name, id: record.id };
+  if (input.dataUrl) user.profile.photo = input.dataUrl;
   refreshKyc(user);
   return ok();
 }

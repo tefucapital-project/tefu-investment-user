@@ -55,6 +55,7 @@ export type RemoteKycView = {
   updateReason?: string | null;
   banks?: Array<{ id: string; bankName: string; accountName: string; last4: string; status: string; eligible: boolean }>;
   documents?: Array<{ id: string; kind: string; fileName: string; status: string }>;
+  hasAvatar?: boolean;
 };
 
 export function mapAccountStatus(status: string): AccountStatus {

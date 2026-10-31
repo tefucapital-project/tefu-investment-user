@@ -25,7 +25,7 @@ import {
   updateProfile,
   verifyOtp,
 } from "../lib/engine";
-import { api as liveApi, ApiError, clearApiTokens, hasApiSession, newIdempotencyKey, saveApiTokens, type Checkout, type Tokens } from "../lib/api";
+import { api as liveApi, ApiError, clearApiTokens, hasApiSession, loadAvatarDataUrl, newIdempotencyKey, saveApiTokens, type Checkout, type Tokens } from "../lib/api";
 import { deviceLabel, digest, oneTimeCode, uid } from "../lib/format";
 import { applyRemoteKyc, mapAccountStatus, upsertRemoteUser, type RemoteKycView } from "../lib/remoteUser";
 import { allLive } from "../lib/selectors";
@@ -99,6 +99,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(draft);
     return result;
   };
+
+  useEffect(() => {
+    if (!hasApiSession()) return;
+    const user = stateRef.current.users.find((item) => item.id === stateRef.current.currentUserId);
+    if (!user || user.profile.photo || user.kyc.selfie.status === "not_started") return;
+    let cancelled = false;
+    void loadAvatarDataUrl().then((photo) => {
+      if (cancelled || !photo) return;
+      apply((draft) => {
+        const current = draft.users.find((item) => item.id === draft.currentUserId);
+        if (!current || current.profile.photo) return { ok: true as const };
+        current.profile.photo = photo;
+        return { ok: true as const };
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once when a live session is restored
+  }, []);
 
   const resolvePin = async (pin: string): Promise<PinCarry> => {
     const user = stateRef.current.users.find((item) => item.id === stateRef.current.currentUserId);
@@ -186,18 +206,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
       async login(email, password) {
         try {
-          const result = await liveApi<Tokens>("/auth/login", {
+          const tokens = await liveApi<Tokens>("/auth/login", {
             method: "POST",
             auth: false,
             body: JSON.stringify({ email: email.trim(), password }),
           });
-          saveApiTokens(result.data.accessToken, result.data.refreshToken);
+          saveApiTokens(tokens.data.accessToken, tokens.data.refreshToken);
           const [profile, account, kyc] = await Promise.all([
-            liveApi<{ id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string }>("/profile"),
+            liveApi<{ id: string; email: string; phone: string | null; firstName: string; middleName: string; lastName: string; status: string; hasAvatar?: boolean }>("/profile"),
             liveApi<{ onboardingFeePaid: boolean; status: string; canInvest: boolean }>("/account"),
             liveApi<RemoteKycView>("/kyc").catch(() => null),
           ]);
-          return apply((draft) => {
+          const signedIn = apply((draft) => {
             const user = upsertRemoteUser(draft, profile.data, {
               feePaidAt: account.data.onboardingFeePaid ? Date.now() : null,
             });
@@ -205,6 +225,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (kyc?.data) applyRemoteKyc(user, kyc.data, account.data.status);
             return { ok: true as const, data: { twoFactor: false, sessionId: profile.data.id } };
           });
+          const needsAvatar =
+            Boolean(profile.data.hasAvatar) ||
+            Boolean(kyc?.data?.hasAvatar) ||
+            Boolean(kyc?.data?.documents?.some((item) => item.kind === "SELFIE"));
+          if (needsAvatar) {
+            const photo = await loadAvatarDataUrl();
+            if (photo) {
+              apply((draft) => {
+                const user = draft.users.find((item) => item.id === draft.currentUserId);
+                if (!user) return { ok: false as const, error: "Sign in to continue." };
+                user.profile.photo = photo;
+                return { ok: true as const };
+              });
+            }
+          }
+          return signedIn;
         } catch (error) {
           if (error instanceof ApiError) {
             return { ok: false, error: error.message || "Email or password is incorrect." };
@@ -414,13 +450,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
             liveApi<{ onboardingFeePaid: boolean; status: string }>("/account"),
             liveApi<RemoteKycView>("/kyc"),
           ]);
+          let missingPhoto = false;
           apply((draft) => {
             const user = draft.users.find((item) => item.id === draft.currentUserId);
             if (!user) return { ok: false as const, error: "Sign in to continue." };
             user.feePaidAt = account.data.onboardingFeePaid ? user.feePaidAt ?? Date.now() : null;
             applyRemoteKyc(user, kyc.data, account.data.status);
+            missingPhoto =
+              !user.profile.photo &&
+              (Boolean(kyc.data.hasAvatar) || Boolean(kyc.data.documents?.some((item) => item.kind === "SELFIE")));
             return { ok: true as const };
           });
+          if (missingPhoto) {
+            const photo = await loadAvatarDataUrl();
+            if (photo) {
+              apply((draft) => {
+                const user = draft.users.find((item) => item.id === draft.currentUserId);
+                if (!user) return { ok: false as const, error: "Sign in to continue." };
+                user.profile.photo = photo;
+                return { ok: true as const };
+              });
+            }
+          }
           return { ok: true as const };
         } catch (error) {
           if (error instanceof ApiError) return { ok: false, error: error.message };

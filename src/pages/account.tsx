@@ -62,21 +62,20 @@ export function ProfilePage() {
           {error ? <Banner tone="danger">{error}</Banner> : null}
           {saved ? <Banner tone="ok">{saved}</Banner> : null}
           <p className="text-sm">Name: {fullName(user)} {locked ? "· locked after identity verification" : ""}</p>
-          {user.profile.photo ? <img src={user.profile.photo} alt="Profile" className="h-20 w-20 rounded-full object-cover" /> : null}
-          <label className="block text-sm">
-            <span className="mb-1.5 block font-medium">Profile photo</span>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (!file || file.size > 500_000) return;
-                const reader = new FileReader();
-                reader.onload = () => updateProfile({ photo: String(reader.result) });
-                reader.readAsDataURL(file);
-              }}
-            />
-          </label>
+          <div className="flex items-center gap-4">
+            {user.profile.photo ? (
+              <img src={user.profile.photo} alt="Profile" className="h-20 w-20 rounded-full object-cover border border-line" />
+            ) : (
+              <div className="grid h-20 w-20 place-items-center rounded-full border border-dashed border-line bg-cream text-xs text-muted">No photo</div>
+            )}
+            <div className="text-sm">
+              <p className="font-medium">Profile photo</p>
+              <p className="mt-1 text-muted">Your KYC selfie is your profile picture.</p>
+              <Link to="/kyc/selfie" className="mt-2 inline-flex text-canopy">
+                {user.profile.photo || user.kyc.selfie.status !== "not_started" ? "Update selfie" : "Add selfie"}
+              </Link>
+            </div>
+          </div>
           <TextField label="Email" value={email} onChange={setEmail} />
           <TextField label="Phone" value={phone} onChange={setPhone} />
           <TextField label="Address" value={address} onChange={setAddress} />

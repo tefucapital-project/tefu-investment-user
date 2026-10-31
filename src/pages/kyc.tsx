@@ -567,7 +567,7 @@ export function KycSelfie() {
 
   return (
     <KycFrame>
-      <PageTitle title="Identity photo" lede="A clear photo of your face is included in the KYC file." />
+      <PageTitle title="Identity photo" lede="A clear photo of your face is included in the KYC file and becomes your profile picture on Tefu." />
       <form
         className="space-y-4 rounded-[2rem] border border-line bg-paper p-6"
         onSubmit={(event) => {

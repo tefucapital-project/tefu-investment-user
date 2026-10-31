@@ -102,3 +102,41 @@ export type Checkout = {
 };
 
 export type Tokens = { accessToken: string; refreshToken: string };
+
+/** Fetch a binary authenticated response (e.g. profile avatar from KYC selfie). */
+export async function apiBlob(path: string): Promise<Blob> {
+  const headers = new Headers();
+  const token = localStorage.getItem(ACCESS_KEY);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let response: Response;
+  try {
+    response = await fetch(`${apiRoot()}${path}`, { headers });
+  } catch {
+    throw new ApiError("Could not reach the Tefu API. Check your connection and try again.", 0, "NETWORK");
+  }
+  if (response.status === 401 && localStorage.getItem(REFRESH_KEY)) {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      headers.set("Authorization", `Bearer ${localStorage.getItem(ACCESS_KEY)}`);
+      response = await fetch(`${apiRoot()}${path}`, { headers });
+    }
+  }
+  if (!response.ok) {
+    throw new ApiError("Could not load that file.", response.status);
+  }
+  return response.blob();
+}
+
+export async function loadAvatarDataUrl(): Promise<string | null> {
+  try {
+    const blob = await apiBlob("/profile/avatar");
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read avatar."));
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}

@@ -74,6 +74,13 @@ export function AppShell() {
           <p className="hidden text-sm text-muted md:block">Available balance</p>
           <div className="flex items-center gap-3">
             <p className="font-serif text-lg text-forest">{naira(user.wallet.available)}</p>
+            <NavLink to="/profile" className="hidden h-10 w-10 overflow-hidden rounded-full border border-line bg-paper sm:block" aria-label="Profile photo">
+              {user.profile.photo ? (
+                <img src={user.profile.photo} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span className="grid h-full w-full place-items-center text-[10px] text-muted">You</span>
+              )}
+            </NavLink>
             <NavLink to="/notifications" className="relative grid h-10 w-10 place-items-center rounded-full border border-line bg-paper" aria-label="Notifications">
               <Bell size={16} />
               {unread > 0 ? <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-gold px-1 text-[10px] text-white">{unread}</span> : null}
@@ -121,6 +128,15 @@ export function OnboardingShell() {
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-4">
           <Logo />
           <div className="flex items-center gap-3">
+            {user.profile.photo ? (
+              <NavLink
+                to={user.status === "active" ? "/profile" : "/kyc/selfie"}
+                className="h-9 w-9 overflow-hidden rounded-full border border-line"
+                aria-label="Profile photo"
+              >
+                <img src={user.profile.photo} alt="" className="h-full w-full object-cover" />
+              </NavLink>
+            ) : null}
             <NavLink to="/onboarding/account" className="text-sm text-canopy">
               Account
             </NavLink>
