@@ -669,6 +669,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
               applyRemoteKyc(user, result.data);
               return { ok: true as const };
             });
+            // Once the file is complete, send it to the admin KYC queue automatically.
+            try {
+              const submitted = await liveApi<RemoteKycView>("/kyc/submit", { method: "POST", body: JSON.stringify({}) });
+              apply((draft) => {
+                const user = draft.users.find((item) => item.id === draft.currentUserId);
+                if (!user) return { ok: false as const, error: "Sign in to continue." };
+                applyRemoteKyc(user, submitted.data, "KYC_PENDING_REVIEW");
+                user.kyc.events.push({
+                  status: "Pending Review",
+                  at: Date.now(),
+                  note: "KYC submitted for admin review after identity photo upload.",
+                });
+                return { ok: true as const };
+              });
+            } catch {
+              /* Not complete yet, or already submitted — selfie save still succeeded. */
+            }
             return { ok: true as const };
           } catch (error) {
             if (error instanceof ApiError) return { ok: false, error: error.message };
